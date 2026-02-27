@@ -9,6 +9,7 @@ import "react-native-reanimated";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { ConnectPromptSheet } from "@/components/connect-prompt-sheet";
+import { LocationProvider } from "@/contexts/location-context";
 import { MessageStoreProvider } from "@/contexts/message-store-context";
 import { SerialProvider } from "@/contexts/serial-context";
 import { ToastProvider } from "@/contexts/toast-context";
@@ -23,25 +24,27 @@ export default function RootLayout() {
 
   return (
     <SafeAreaProvider>
-      <MessageStoreProvider>
-        <SerialProvider>
-          <ToastProvider>
-            <ConnectPromptSheet />
-            <ThemeProvider
-              value={colorScheme === "dark" ? DarkTheme : DefaultTheme}
-            >
-              <Stack>
-                <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-                <Stack.Screen
-                  name="modal"
-                  options={{ presentation: "modal", title: "Modal" }}
-                />
-              </Stack>
-              <StatusBar style="auto" />
-            </ThemeProvider>
-          </ToastProvider>
-        </SerialProvider>
-      </MessageStoreProvider>
+      <LocationProvider>
+        <MessageStoreProvider>
+          <SerialProvider>
+            <ToastProvider>
+              <ConnectPromptSheet />
+              <ThemeProvider
+                value={colorScheme === "dark" ? DarkTheme : DefaultTheme}
+              >
+                <Stack>
+                  <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+                  <Stack.Screen
+                    name="modal"
+                    options={{ presentation: "modal", title: "Modal" }}
+                  />
+                </Stack>
+                <StatusBar style="auto" />
+              </ThemeProvider>
+            </ToastProvider>
+          </SerialProvider>
+        </MessageStoreProvider>
+      </LocationProvider>
     </SafeAreaProvider>
   );
 }

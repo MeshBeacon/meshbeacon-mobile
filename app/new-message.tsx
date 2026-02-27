@@ -18,7 +18,7 @@ import { SerialStatusBanner } from "@/components/serial-status-banner";
 import { useMessageStoreCtx } from "@/contexts/message-store-context";
 import { useSerial } from "@/contexts/serial-context";
 import { useToast } from "@/contexts/toast-context";
-import { useLocation } from "@/hooks/use-location";
+import { useLocationCtx } from "@/contexts/location-context";
 
 const URGENCY_OPTIONS = ["Low Urgency", "Medium", "Critical"] as const;
 
@@ -26,7 +26,7 @@ export default function NewMessageScreen() {
   const router = useRouter();
   const { status, sendMessage } = useSerial();
   const { addSent } = useMessageStoreCtx();
-  const gps = useLocation(true);
+  const gps = useLocationCtx();
   const [message, setMessage] = useState("");
   const [attachGps, setAttachGps] = useState(true);
   const [urgency, setUrgency] =

@@ -18,7 +18,7 @@ import { SerialStatusBanner } from "@/components/serial-status-banner";
 import { useMessageStoreCtx } from "@/contexts/message-store-context";
 import { useSerial } from "@/contexts/serial-context";
 import { useToast } from "@/contexts/toast-context";
-import { useLocation } from "@/hooks/use-location";
+import { useLocationCtx } from "@/contexts/location-context";
 
 const URGENCY_OPTIONS = ["Low", "Medium", "Critical"] as const;
 type UrgencyOption = (typeof URGENCY_OPTIONS)[number];
@@ -33,7 +33,7 @@ export default function MessagesScreen() {
   const { status, sendMessage } = useSerial();
   const { messages, loaded, addSent } = useMessageStoreCtx();
   const { showToast } = useToast();
-  const gps = useLocation(true);
+  const gps = useLocationCtx();
   const scrollRef = useRef<ScrollView>(null);
   const initialScrollDone = useRef(false);
   const keyboardVisible = useRef(false);
