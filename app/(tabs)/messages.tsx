@@ -75,12 +75,10 @@ export default function MessagesScreen() {
   const [urgency, setUrgency] = useState<UrgencyOption>("Low");
   const [sending, setSending] = useState(false);
 
-  // Only block sending while GPS is actively in-flight.
-  // If permission was denied or errored, allow sending without location.
-  // Block send while GPS hasn't produced its first fix yet.
-  // "idle" = LocationProvider effect hasn't run yet; "requesting" = acquiring.
-  const gpsAcquiring =
-    attachGps && (gps.status === "idle" || gps.status === "requesting");
+  // Never block the send button on GPS state — the GPS pill already shows
+  // "Acquiring…" so the user knows. If GPS isn't ready when they tap send,
+  // the message goes without coordinates (which is correct behaviour).
+  const gpsAcquiring = false;
 
   const formatTime = (ts: number) => {
     const d = new Date(ts);

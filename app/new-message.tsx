@@ -33,10 +33,10 @@ export default function NewMessageScreen() {
     useState<(typeof URGENCY_OPTIONS)[number]>("Low Urgency");
   const [sending, setSending] = useState(false);
 
-  // Block send while GPS hasn't produced its first fix yet.
-  // "idle" = LocationProvider effect hasn't run yet; "requesting" = acquiring.
-  const gpsAcquiring =
-    attachGps && (gps.status === "idle" || gps.status === "requesting");
+  // Never block the send button on GPS state — the GPS label already shows
+  // "Acquiring…" so the user knows. If GPS isn't ready when they tap send,
+  // the message goes without coordinates (which is correct behaviour).
+  const gpsAcquiring = false;
   const { showToast } = useToast();
 
   const urgencyKey = (
