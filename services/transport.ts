@@ -29,6 +29,8 @@ export type StatusCallback = (status: TransportStatus, detail?: string) => void;
  *   CDK:ERR,MSG:queue full\n      → ErrFrame    — error string
  *   CDK:MSG,TEXT:help\n           → MsgFrame    — inbound LoRa text message
  *
+ *   CDK:BCAST,TEXT:evacuate now\n    → BcastFrame  — emergency broadcast to all
+ *
  * All frames must fit within MAX_FRAME_BYTES (256) including the trailing \n.
  * Any unrecognised type lands in UnknownFrame so nothing is silently dropped.
  */
@@ -42,6 +44,12 @@ export type StatusFrame = { type: "STATUS"; fields: Record<string, string> };
 export type ErrFrame = { type: "ERR"; message: string };
 export type MsgFrame = {
   type: "MSG";
+  text: string;
+  receivedAt: number;
+};
+/** Emergency broadcast from the operator to ALL devices (topic 24). */
+export type BcastFrame = {
+  type: "BCAST";
   text: string;
   receivedAt: number;
 };
@@ -63,6 +71,7 @@ export type IncomingFrame =
   | StatusFrame
   | ErrFrame
   | MsgFrame
+  | BcastFrame
   | DeviceSosFrame
   | UnknownFrame;
 
@@ -107,6 +116,12 @@ export function parseIncomingLine(line: string): IncomingFrame | null {
     case "MSG":
       return {
         type: "MSG",
+        text: fields["TEXT"] ?? rest,
+        receivedAt: Date.now(),
+      };
+    case "BCAST":
+      return {
+        type: "BCAST",
         text: fields["TEXT"] ?? rest,
         receivedAt: Date.now(),
       };

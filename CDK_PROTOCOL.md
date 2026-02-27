@@ -27,6 +27,7 @@ with an ESP32 device, covering both Android (USB serial) and iOS/Android
 11. [Device Button SOS](#11-device-button-sos)
 12. [Transport Selection & Startup Flow](#12-transport-selection--startup-flow)
 13. [BLE Device Discovery](#13-ble-device-discovery)
+14. [Emergency Broadcast](#14-emergency-broadcast)
 
 ---
 
@@ -286,6 +287,38 @@ frame must not exceed 256 bytes including the trailing `\n`, which limits
 > ESP32 (§2.2) but with different fields (`URGENCY`, `LAT`, `LNG`, `TEXT`).
 > The two uses never collide because the ESP32 firmware only ever _receives_
 > that variant and only ever _sends_ the `TEXT`-only variant.
+
+---
+
+#### Emergency Broadcast ← **triggers local notification + UI banner**
+
+Sent by the ESP32 when it receives a **topic 24** LoRa packet originating from
+the `opendms` operator panel. This is a **global** alert directed at all devices
+simultaneously (LoRa target `BROADCAST`), unlike `CDK:MSG` which goes to one
+specific duck.
+
+```
+CDK:BCAST,TEXT:<message-text>\n
+```
+
+| Field  | Type         | Notes                                                                    |
+| ------ | ------------ | ------------------------------------------------------------------------ |
+| `TEXT` | ASCII string | The operator-composed emergency message; no embedded commas or newlines  |
+
+Example:
+
+```
+CDK:BCAST,TEXT:Evacuate sector 4 immediately\n
+```
+
+The frame must not exceed 256 bytes including the trailing `\n`, limiting
+`TEXT` to at most 241 characters (`CDK:BCAST,TEXT:` is 14 chars + `\n`).
+
+> **Contrast with `CDK:MSG`:** `CDK:MSG,TEXT:…` is a targeted message relayed
+> from one duck to its connected phone. `CDK:BCAST,TEXT:…` is an
+> operator-initiated emergency alert sent to **all** ducks at once. The app
+> renders them differently: `MSG` appears in the Incoming Messages list;
+> `BCAST` appears in the red Emergency Broadcast banner above it.
 
 ---
 
@@ -982,7 +1015,7 @@ void loop() {
 
 | File                                  | Purpose                                                                                                                                                                        |
 | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `services/transport.ts`               | `ITransport` interface, all frame types (incl. `DeviceSosFrame`), `parseIncomingLine()`, `LineBuffer`                                                                          |
+| `services/transport.ts`               | `ITransport` interface, all frame types (incl. `DeviceSosFrame`, `BcastFrame`), `parseIncomingLine()`, `LineBuffer`                                                            |
 | `services/serial.ts`                  | USB serial implementation of `ITransport` (Android); 2-s disconnect poll; auto-disconnect on send failure                                                                      |
 | `services/ble.ts`                     | BLE NUS implementation of `ITransport` (iOS + Android); `scanDevices()`; `connect(targetDeviceId?)`; PING after connect; name-based scan filter                                |
 | `services/index.ts`                   | Picks the right transport for the current platform; `defaultTransportMode`; exports `bleService` for direct access                                                             |
@@ -991,10 +1024,10 @@ void loop() {
 | `components/connect-prompt-sheet.tsx` | Android-only startup bottom sheet asking user to choose USB or BLE transport before first connection                                                                           |
 | `components/ble-device-picker.tsx`    | Live BLE scan list showing nearby ClusterDuck devices with RSSI signal strength; tap to connect                                                                                |
 | `hooks/use-location.ts`               | Requests GPS permission, watches position; returns `GpsState`                                                                                                                  |
-| `hooks/use-esp32-data.ts`             | Subscribes to `transport.onFrameReceived()`; reducer with `__RESET__` on disconnect; returns `{ battery, deviceId, deviceSosAlerts, lastAckId, statusFields, lastError }`      |
+| `hooks/use-esp32-data.ts`             | Subscribes to `transport.onFrameReceived()`; reducer with `__RESET__` on disconnect; returns `{ battery, deviceId, incomingMessages, broadcastAlerts, deviceSosAlerts, … }`    |
 | `hooks/use-message-store.ts`          | Persistent message storage via `expo-file-system`; JSON file at `documentDirectory/cdk-messages.json`; max 200 messages                                                        |
-| `hooks/use-message-notifications.ts`  | Local push notifications via `expo-notifications`; `notifyNewMessage(text)` and `notifyDeviceSOS(deviceId)`                                                                    |
-| `app/(tabs)/index.tsx`                | Home screen — SOS button, GPS card, Device Info card (ID + battery), device SOS alert history                                                                                  |
+| `hooks/use-message-notifications.ts`  | Local push notifications via `expo-notifications`; `notifyNewMessage`, `notifyDeviceSOS`, and `notifyEmergencyBroadcast`                                                       |
+| `app/(tabs)/index.tsx`                | Home screen — SOS button, GPS card, Device Info card (ID + battery), Emergency Broadcast banner, incoming messages, device SOS history                                         |
 | `app/(tabs)/messages.tsx`             | Persistent message history list (sent + received)                                                                                                                              |
 | `app/(tabs)/settings.tsx`             | Emergency contacts CRUD + personal Medical ID editing                                                                                                                          |
 | `app/new-message.tsx`                 | Compose and send a text message with urgency level + optional GPS                                                                                                              |
@@ -1164,17 +1197,18 @@ push server is involved — all notifications are scheduled locally on the devic
 
 ### Notification Types
 
-| Event                                    | Title                      | Body                                               |
-| ---------------------------------------- | -------------------------- | -------------------------------------------------- |
-| Incoming LoRa message (`CDK:MSG`)        | 📨 New ClusterDuck Message | The message text                                   |
-| Device button SOS (`CDK:SOS,SRC:DEVICE`) | 🆘 SOS from Device         | `<deviceId> triggered an SOS via hardware button.` |
+| Event                                       | Title                      | Body                                               |
+| ------------------------------------------- | -------------------------- | -------------------------------------------------- |
+| Incoming LoRa message (`CDK:MSG`)           | 📨 New ClusterDuck Message | The message text                                   |
+| Device button SOS (`CDK:SOS,SRC:DEVICE`)   | 🆘 SOS from Device         | `<deviceId> triggered an SOS via hardware button.` |
+| Emergency broadcast (`CDK:BCAST`)           | 📢 EMERGENCY BROADCAST     | The broadcast message text                         |
 
 ### Implementation
 
 `hooks/use-message-notifications.ts` exposes:
 
 ```typescript
-const { notifyNewMessage, notifyDeviceSOS } = useMessageNotifications();
+const { notifyNewMessage, notifyDeviceSOS, notifyEmergencyBroadcast } = useMessageNotifications();
 ```
 
 `notifyNewMessage(text)` is called from `useEsp32Data` when a `CDK:MSG` frame
@@ -1182,6 +1216,8 @@ arrives with a `TEXT` field.
 
 `notifyDeviceSOS(deviceId)` is called when a `CDK:SOS,SRC:DEVICE` frame
 arrives.
+
+`notifyEmergencyBroadcast(text)` is called when a `CDK:BCAST` frame arrives.
 
 ### Permissions
 
@@ -1326,3 +1362,195 @@ export interface ScannedDevice {
 `scanDevices(onFound, timeoutMs)` starts a scan, calls `onFound` for each
 matching device, stops after `timeoutMs` ms, and returns a stop function for
 early cancellation.
+
+---
+
+## 14. Emergency Broadcast
+
+The emergency broadcast feature allows an **operator** on the `opendms` web
+panel to send a single message to **all** connected ClusterDuck devices
+simultaneously. It is distinct from per-duck targeted messaging (§2.2 `CDK:MSG`)
+and uses a dedicated MQTT topic and LoRa target.
+
+### End-to-End Flow
+
+```
+Operator (opendms web UI)
+        │
+        │  POST /status/broadcast  { message: "Evacuate now" }
+        ▼
+StatusController::broadcast()
+        │
+        │  MqttService::sendCommand(message, target: "BROADCAST", topic: 24)
+        ▼
+MQTT broker  →  hub/command
+        │
+        │  LoRa mesh (ClusterDuck Protocol, topic 24)
+        ▼
+MamaDuck firmware  →  handleDuckData(packet)  [case 24]
+        │
+        ├──  displayAnnouncement(message)     [OLED: "[SIARAN KECEMASAN]"]
+        ├──  flashLED()                       [physical LED alert]
+        └──  broadcast("CDK:BCAST,TEXT:" + message)
+                  │
+                  ├── Serial.print(...)       [USB serial → Android]
+                  └── pTxChar->notify(...)   [BLE NUS TX → iOS / Android]
+                              │
+                              ▼
+                  Mobile App (iOS / Android)
+                  parseIncomingLine()  →  BcastFrame
+                  useEsp32Data reducer  →  broadcastAlerts[]
+                  notifyEmergencyBroadcast()  →  push notification
+                  Home screen  →  red Emergency Broadcast banner
+```
+
+### MQTT Payload (opendms → broker)
+
+`MqttService::sendCommand()` publishes to `hub/command`:
+
+```json
+{
+  "target":  "BROADCAST",
+  "topic":   24,
+  "message": "Evacuate sector 4 immediately"
+}
+```
+
+| Field     | Value         | Notes                                                      |
+| --------- | ------------- | ---------------------------------------------------------- |
+| `target`  | `"BROADCAST"` | Instructs the hub to relay to all devices                  |
+| `topic`   | `24`          | Reserved LoRa topic for emergency broadcasts               |
+| `message` | string        | Plain text, max 200 chars (validated by Laravel controller) |
+
+The broadcast is also persisted in `cluster_data` with
+`duck_id = "BROADCAST"`, `topic = "outbound"`, and
+`payload = "MSG,TEXT:<message>"` for audit history.
+
+### HTTP Endpoint (opendms)
+
+```
+POST /status/broadcast
+Content-Type: application/json
+X-CSRF-TOKEN: <token>
+
+{ "message": "<text, max 200 chars>" }
+```
+
+Success response (`200 OK`):
+
+```json
+{ "message": "Emergency broadcast sent successfully!" }
+```
+
+The route is protected by `auth` + `verified` middleware — only authenticated
+operators can trigger a broadcast. The compose dialog is a red-accented modal
+on the Status page header row, fired by the **Emergency Broadcast** button.
+
+### CDK Wire Frame (ESP32 → App)
+
+See §2.3 for the full frame specification. Summary:
+
+```
+CDK:BCAST,TEXT:<message>\n
+```
+
+### Firmware Handler (`MamaDuck.ino`)
+
+`handleDuckData()` switches on `packet.topic`:
+
+```cpp
+case 24:  // Emergency broadcast from operator
+    Serial.println("📢 Emergency Broadcast: " + message);
+    displayAnnouncement(message);                       // OLED
+    flashLED();                                         // physical alert
+    broadcast(String("CDK:BCAST,TEXT:") + message);    // USB + BLE
+    break;
+```
+
+`displayAnnouncement()` renders a two-part OLED layout:
+- **Header row** (centred): `[SIARAN KECEMASAN]`
+- **Body** (left-aligned, word-wrapped): message text
+- Stays on screen for **8 seconds** then powers off the display.
+
+Both the USB Serial and BLE NUS TX channels are written by the shared
+`broadcast()` helper, so any connected phone receives the frame regardless of
+transport.
+
+### Mobile App — TypeScript Types
+
+```typescript
+// services/transport.ts
+export type BcastFrame = {
+  type: "BCAST";
+  text: string;        // the emergency message text
+  receivedAt: number;  // Date.now() at parse time
+};
+```
+
+`BcastFrame` is part of the `IncomingFrame` union and handled by
+`parseIncomingLine()`:
+
+```typescript
+case "BCAST":
+  return {
+    type: "BCAST",
+    text: fields["TEXT"] ?? rest,
+    receivedAt: Date.now(),
+  };
+```
+
+### Mobile App — State (`useEsp32Data`)
+
+```typescript
+interface Esp32Data {
+  // ... existing fields ...
+  broadcastAlerts: BcastFrame[];  // newest-first; cleared on disconnect
+}
+```
+
+The `"BCAST"` case in the reducer prepends to `broadcastAlerts` and also
+calls `notifyEmergencyBroadcast(text)` in the subscription effect.
+
+### Mobile App — Push Notification
+
+```typescript
+// hooks/use-message-notifications.ts
+async function notifyEmergencyBroadcast(text: string) {
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title: "📢 EMERGENCY BROADCAST",
+      body: text,
+      sound: true,
+    },
+    trigger: null,  // immediate
+  });
+}
+```
+
+Fired on every `CDK:BCAST` frame, even when the app is backgrounded.
+
+### Mobile App — UI (Home Screen)
+
+The Emergency Broadcast banner is rendered **above** the Incoming Messages card
+and is **hidden** when `broadcastAlerts` is empty.
+
+Visual design:
+
+- Red double border (`#dc2626`), light red background (`#fff5f5`)
+- `campaign` icon + **EMERGENCY BROADCAST** uppercase label + red count badge
+- Each entry: red left-border accent, HH:MM timestamp, bold dark-red message text
+- Expand / collapse toggle appears when there are more than 2 broadcasts
+
+### Comparison: Broadcast vs Targeted Message
+
+| Property            | `CDK:MSG,TEXT:…`            | `CDK:BCAST,TEXT:…`                    |
+| ------------------- | ---------------------------- | ------------------------------------- |
+| Origin              | Duck user → their own duck   | Operator (`opendms`) → all ducks      |
+| MQTT topic          | 22                           | 24                                    |
+| LoRa target         | Specific duck ID             | `BROADCAST` (all devices)             |
+| App state field     | `incomingMessages[]`         | `broadcastAlerts[]`                   |
+| Push notification   | 📨 New ClusterDuck Message   | 📢 EMERGENCY BROADCAST                |
+| UI card             | Incoming Messages (orange)   | Emergency Broadcast (red)             |
+| Persisted to DB     | No                           | Yes (`duck_id = "BROADCAST"`)          |
+| Max text length     | 242 chars                    | 241 chars                             |
+

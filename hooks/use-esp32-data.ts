@@ -11,19 +11,22 @@
  *   CDK:ERR,MSG:queue full\n     — error message
  */
 
+import { useBroadcastStoreCtx } from "@/contexts/broadcast-store-context";
 import { useMessageStoreCtx } from "@/contexts/message-store-context";
 import { useSerial } from "@/contexts/serial-context";
+import type { StoredBroadcast } from "@/hooks/use-broadcast-store";
 import { useMessageNotifications } from "@/hooks/use-message-notifications";
 import { serviceForMode } from "@/services";
 import type {
-  AckFrame,
-  BattFrame,
-  DeviceSosFrame,
-  ErrFrame,
-  IdFrame,
-  IncomingFrame,
-  MsgFrame,
-  StatusFrame,
+    AckFrame,
+    BattFrame,
+    BcastFrame,
+    DeviceSosFrame,
+    ErrFrame,
+    IdFrame,
+    IncomingFrame,
+    MsgFrame,
+    StatusFrame,
 } from "@/services/transport";
 import { useEffect, useReducer } from "react";
 
@@ -42,11 +45,14 @@ export interface Esp32Data {
   lastFrame: IncomingFrame | null;
   /** Inbound LoRa text messages received from the ESP32, newest first. */
   incomingMessages: MsgFrame[];
+  /** Emergency broadcast messages sent by the operator to all devices, newest first.
+   * Persisted across disconnects and app restarts. */
+  broadcastAlerts: StoredBroadcast[];
   /** SOS alerts triggered by the hardware button on the ESP32, newest first. */
   deviceSosAlerts: DeviceSosFrame[];
 }
 
-const initial: Esp32Data = {
+const initial: Omit<Esp32Data, "broadcastAlerts"> = {
   battery: null,
   deviceId: null,
   lastAckId: null,
@@ -59,7 +65,9 @@ const initial: Esp32Data = {
 
 type Action = IncomingFrame | { type: "__RESET__" };
 
-function reduce(state: Esp32Data, action: Action): Esp32Data {
+type ReducerState = Omit<Esp32Data, "broadcastAlerts">;
+
+function reduce(state: ReducerState, action: Action): ReducerState {
   if (action.type === "__RESET__") return initial;
   const frame = action as IncomingFrame;
   switch (frame.type) {
@@ -96,6 +104,10 @@ function reduce(state: Esp32Data, action: Action): Esp32Data {
         lastFrame: frame,
       };
     }
+    case "BCAST": {
+      // Persisted via BroadcastStore — only update lastFrame in the reducer
+      return { ...state, lastFrame: frame };
+    }
     case "SOS": {
       const sos = frame as DeviceSosFrame;
       return {
@@ -112,8 +124,10 @@ function reduce(state: Esp32Data, action: Action): Esp32Data {
 export function useEsp32Data(): Esp32Data {
   const [state, dispatch] = useReducer(reduce, initial);
   const { addReceived } = useMessageStoreCtx();
+  const { broadcasts, addBroadcast } = useBroadcastStoreCtx();
   const { transportMode, status } = useSerial();
-  const { notifyNewMessage, notifyDeviceSOS } = useMessageNotifications();
+  const { notifyNewMessage, notifyDeviceSOS, notifyEmergencyBroadcast } =
+    useMessageNotifications();
 
   // Reset all ESP32 data when the transport disconnects
   useEffect(() => {
@@ -131,6 +145,11 @@ export function useEsp32Data(): Esp32Data {
         addReceived(msg.text);
         notifyNewMessage(msg.text);
       }
+      if (frame.type === "BCAST") {
+        const bcast = frame as BcastFrame;
+        addBroadcast(bcast.text, bcast.receivedAt);
+        notifyEmergencyBroadcast(bcast.text);
+      }
       if (
         frame.type === "SOS" &&
         (frame as DeviceSosFrame).source === "DEVICE"
@@ -138,7 +157,7 @@ export function useEsp32Data(): Esp32Data {
         notifyDeviceSOS((frame as DeviceSosFrame).deviceId);
       }
     });
-  }, [addReceived, transportMode]);
+  }, [addReceived, addBroadcast, transportMode]);
 
-  return state;
+  return { ...state, broadcastAlerts: broadcasts };
 }

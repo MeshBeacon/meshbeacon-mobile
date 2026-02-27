@@ -25,6 +25,17 @@ export default function HomeScreen() {
   const { showToast, showConfirm } = useToast();
   const [sending, setSending] = useState(false);
   const [showAllMessages, setShowAllMessages] = useState(false);
+  const [showAllBroadcasts, setShowAllBroadcasts] = useState(false);
+  const [expandedBroadcasts, setExpandedBroadcasts] = useState<Set<string>>(
+    new Set(),
+  );
+
+  const toggleBroadcastExpand = (id: string) =>
+    setExpandedBroadcasts((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
 
   const handleSOS = useCallback(async () => {
     if (status === "disconnected" || status === "error") {
@@ -213,6 +224,76 @@ export default function HomeScreen() {
                 : "Connect ESP32 to enable"}
             </Text>
           </View>
+
+          {/* Emergency broadcast alerts */}
+          {esp32.broadcastAlerts.length > 0 && (
+            <View style={styles.bcastCard}>
+              <View style={styles.bcastHeader}>
+                <MaterialIcons name="campaign" size={17} color="#dc2626" />
+                <Text style={styles.bcastTitle}>Emergency Broadcast</Text>
+                <View style={styles.bcastBadge}>
+                  <Text style={styles.bcastBadgeText}>
+                    {esp32.broadcastAlerts.length}
+                  </Text>
+                </View>
+              </View>
+              {(showAllBroadcasts
+                ? esp32.broadcastAlerts
+                : esp32.broadcastAlerts.slice(0, 2)
+              ).map((b) => {
+                const isLong = b.text.length > 120;
+                const isExpanded = expandedBroadcasts.has(b.id);
+                return (
+                  <View key={b.id} style={styles.bcastRow}>
+                    <Text style={styles.bcastTime}>
+                      {new Date(b.receivedAt).toLocaleTimeString([], {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </Text>
+                    <Text
+                      style={styles.bcastText}
+                      numberOfLines={isLong && !isExpanded ? 3 : undefined}
+                    >
+                      {b.text}
+                    </Text>
+                    {isLong && (
+                      <Pressable
+                        onPress={() => toggleBroadcastExpand(b.id)}
+                        style={styles.bcastReadMore}
+                      >
+                        <Text style={styles.bcastReadMoreText}>
+                          {isExpanded ? "Show less" : "Read more"}
+                        </Text>
+                        <MaterialIcons
+                          name={isExpanded ? "expand-less" : "expand-more"}
+                          size={14}
+                          color="#dc2626"
+                        />
+                      </Pressable>
+                    )}
+                  </View>
+                );
+              })}
+              {esp32.broadcastAlerts.length > 2 && (
+                <Pressable
+                  style={styles.bcastToggle}
+                  onPress={() => setShowAllBroadcasts((v) => !v)}
+                >
+                  <Text style={styles.bcastToggleText}>
+                    {showAllBroadcasts
+                      ? "Show less"
+                      : `Show all ${esp32.broadcastAlerts.length} broadcasts`}
+                  </Text>
+                  <MaterialIcons
+                    name={showAllBroadcasts ? "expand-less" : "expand-more"}
+                    size={16}
+                    color="#dc2626"
+                  />
+                </Pressable>
+              )}
+            </View>
+          )}
 
           {/* Incoming LoRa messages */}
           <View style={styles.incomingCard}>
@@ -507,4 +588,75 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   incomingToggleText: { fontSize: 13, color: "#f27f0d", fontWeight: "600" },
+  // Emergency broadcast card
+  bcastCard: {
+    borderWidth: 2,
+    borderColor: "#dc2626",
+    borderRadius: 12,
+    padding: 14,
+    gap: 10,
+    backgroundColor: "#fff5f5",
+  },
+  bcastHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: 2,
+  },
+  bcastTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#dc2626",
+    flex: 1,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+  },
+  bcastBadge: {
+    backgroundColor: "#dc2626",
+    borderRadius: 99,
+    minWidth: 20,
+    height: 20,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 6,
+  },
+  bcastBadgeText: { fontSize: 11, fontWeight: "700", color: "#fff" },
+  bcastRow: {
+    gap: 3,
+    borderLeftWidth: 3,
+    borderLeftColor: "#dc2626",
+    paddingLeft: 10,
+    paddingVertical: 2,
+  },
+  bcastTime: { fontSize: 11, color: "#9ca3af", marginBottom: 1 },
+  bcastText: {
+    fontSize: 14,
+    color: "#7f1d1d",
+    fontWeight: "600",
+    lineHeight: 20,
+    flexShrink: 1,
+  },
+  bcastReadMore: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
+    marginTop: 2,
+    alignSelf: "flex-start",
+  },
+  bcastReadMoreText: {
+    fontSize: 12,
+    color: "#dc2626",
+    fontWeight: "600",
+  },
+  bcastToggle: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+    paddingTop: 6,
+    borderTopWidth: 1,
+    borderTopColor: "#fecaca",
+    marginTop: 2,
+  },
+  bcastToggleText: { fontSize: 13, color: "#dc2626", fontWeight: "600" },
 });

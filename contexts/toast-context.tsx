@@ -76,7 +76,9 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const idRef = useRef(0);
 
-  // Shift toasts above the keyboard so they're never hidden behind it.
+  // Track keyboard height so toasts can be shifted above the keyboard.
+  // The toast stack renders in a Modal which is NOT affected by adjustResize,
+  // so we always need the raw keyboard height on both iOS and Android.
   // iOS fires keyboardWillShow/Hide (smoother); Android uses keyboardDidShow/Hide.
   useEffect(() => {
     const showEvent =
@@ -92,7 +94,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
       subShow.remove();
       subHide.remove();
     };
-  }, []);
+  }, [])
 
   // ── Toast ──────────────────────────────────────────────────────────────────
 
@@ -176,44 +178,63 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
         </Pressable>
       </Modal>
 
-      {/* ── Toast Stack ── */}
-      <View
-        style={[
-          styles.toastContainer,
-          {
-            bottom:
-              keyboardHeight > 0
-                ? keyboardHeight + 12 // sit just above the keyboard
-                : Math.max(bottom + 16, 32), // normal safe-area offset
-          },
-        ]}
-        pointerEvents="none"
+      {/* ── Toast Stack ─────────────────────────────────────────────────────
+           Rendered inside a transparent Modal so it is guaranteed to appear
+           above the keyboard and all other UI on both iOS and Android.
+           The Modal is only mounted while toasts are visible (≤ 3 s), so
+           the brief touch-interception window is acceptable.
+      ── */}
+      <Modal
+        visible={toasts.length > 0}
+        transparent
+        animationType="none"
+        statusBarTranslucent
+        onRequestClose={() => {}}
       >
-        {toasts.map((toast) => {
-          const { bg, icon } = VARIANT_COLORS[toast.variant];
-          const translateY = toast.anim.interpolate({
-            inputRange: [0, 1],
-            outputRange: [80, 0],
-          });
-          const opacity = toast.anim;
-          return (
-            <Animated.View
-              key={toast.id}
-              style={[
-                styles.toast,
-                { backgroundColor: bg, transform: [{ translateY }], opacity },
-              ]}
-            >
-              <View style={styles.toastIcon}>
-                <Text style={styles.toastIconText}>{icon}</Text>
-              </View>
-              <Text style={styles.toastMessage} numberOfLines={3}>
-                {toast.message}
-              </Text>
-            </Animated.View>
-          );
-        })}
-      </View>
+        <View style={styles.toastWrapper} pointerEvents="box-none">
+          <View
+            style={[
+              styles.toastContainer,
+              {
+                bottom:
+                  keyboardHeight > 0
+                    ? keyboardHeight + 12
+                    : Math.max(bottom + 16, 32),
+              },
+            ]}
+            pointerEvents="none"
+          >
+            {toasts.map((toast) => {
+              const { bg, icon } = VARIANT_COLORS[toast.variant];
+              const translateY = toast.anim.interpolate({
+                inputRange: [0, 1],
+                outputRange: [80, 0],
+              });
+              const opacity = toast.anim;
+              return (
+                <Animated.View
+                  key={toast.id}
+                  style={[
+                    styles.toast,
+                    {
+                      backgroundColor: bg,
+                      transform: [{ translateY }],
+                      opacity,
+                    },
+                  ]}
+                >
+                  <View style={styles.toastIcon}>
+                    <Text style={styles.toastIconText}>{icon}</Text>
+                  </View>
+                  <Text style={styles.toastMessage} numberOfLines={3}>
+                    {toast.message}
+                  </Text>
+                </Animated.View>
+              );
+            })}
+          </View>
+        </View>
+      </Modal>
     </ToastContext.Provider>
   );
 }
@@ -292,6 +313,9 @@ const styles = StyleSheet.create({
     color: "#fff",
   },
   // Toast
+  toastWrapper: {
+    flex: 1,
+  },
   toastContainer: {
     position: "absolute",
     left: 16,

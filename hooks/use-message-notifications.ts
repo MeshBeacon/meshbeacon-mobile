@@ -51,5 +51,17 @@ export function useMessageNotifications() {
     });
   }
 
-  return { notifyNewMessage, notifyDeviceSOS };
+  async function notifyEmergencyBroadcast(text: string) {
+    if (!permissionGranted.current) return;
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title: "📢 EMERGENCY BROADCAST",
+        body: text,
+        sound: true,
+      },
+      trigger: null,
+    });
+  }
+
+  return { notifyNewMessage, notifyDeviceSOS, notifyEmergencyBroadcast };
 }
