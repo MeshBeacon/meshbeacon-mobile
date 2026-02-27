@@ -8,19 +8,20 @@
 import * as Notifications from "expo-notifications";
 import { useEffect, useRef } from "react";
 
-// Show notifications even when the app is in the foreground
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-  }),
-});
-
 export function useMessageNotifications() {
   const permissionGranted = useRef(false);
 
   useEffect(() => {
+    // Set handler inside the effect so the native module is ready
+    // (avoids "Cannot read property 'getConstants' of null" on iOS with New Architecture)
+    Notifications.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldShowAlert: true,
+        shouldPlaySound: true,
+        shouldSetBadge: true,
+      }),
+    });
+
     Notifications.requestPermissionsAsync().then(({ status }) => {
       permissionGranted.current = status === "granted";
     });

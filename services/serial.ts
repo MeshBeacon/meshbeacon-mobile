@@ -7,11 +7,9 @@
  *   MSG  → "CDK:MSG,URGENCY:<low|medium|critical>,LAT:<lat>,LNG:<lng>,TEXT:<text>\n"
  */
 
-import {
-  Parity,
-  UsbSerialManager,
-  type OpenOptions,
-} from "react-native-usb-serialport-for-android";
+import { Platform } from "react-native";
+// Import types only — they are erased at runtime and safe on iOS
+import type { OpenOptions } from "react-native-usb-serialport-for-android";
 import type UsbSerial from "react-native-usb-serialport-for-android/lib/typescript/usb_serial";
 import type {
   FrameCallback,
@@ -20,6 +18,17 @@ import type {
   TransportStatus,
 } from "./transport";
 import { LineBuffer, parseIncomingLine } from "./transport";
+
+// Load the native module only on Android. On iOS the module does not exist and
+// accessing it would throw "Cannot read property 'getConstants' of null".
+const _androidSerial =
+  Platform.OS === "android"
+    ? require("react-native-usb-serialport-for-android")
+    : null;
+const UsbSerialManager: typeof import("react-native-usb-serialport-for-android")["UsbSerialManager"] | null =
+  _androidSerial?.UsbSerialManager ?? null;
+const Parity: typeof import("react-native-usb-serialport-for-android")["Parity"] =
+  _androidSerial?.Parity ?? { None: 0, Odd: 1, Even: 2, Mark: 3, Space: 4 };
 
 const DEFAULT_OPTIONS: OpenOptions = {
   baudRate: 115200,
@@ -111,6 +120,10 @@ class SerialService implements ITransport {
    * (normally the ESP32). Returns true on success.
    */
   async connect(): Promise<boolean> {
+    if (Platform.OS !== "android" || !UsbSerialManager) {
+      this.setStatus("error", "USB serial is not supported on this platform.");
+      return false;
+    }
     try {
       this.setStatus("connecting");
 
