@@ -31,45 +31,50 @@ export function useLocation(enabled = true) {
         return;
       }
 
-      // Start the watcher first so we never miss a fix, then attempt a fast
-      // one-shot fix to populate coords immediately.  On iOS, the initial
-      // getCurrentPositionAsync can throw a transient error (cold GPS, weak
-      // signal) — previously that caused an early return and left the watcher
-      // never started, so coords stayed undefined for the whole session.
-      watcher = await Location.watchPositionAsync(
-        { accuracy: Location.Accuracy.High, distanceInterval: 5 },
-        (loc) => {
-          setState({
-            status: "ready",
-            coords: {
-              latitude: loc.coords.latitude,
-              longitude: loc.coords.longitude,
-            },
-          });
-        },
-      );
-
-      // Best-effort fast fix — failure is non-fatal because the watcher above
-      // will deliver the first position on its own shortly after.
+      // ── Stage 1: fast coarse fix via WiFi/cell (Balanced) ─────────────────
+      // On iOS, Accuracy.High waits for satellite GPS which can take 30–60 s
+      // indoors. Accuracy.Balanced uses WiFi + cell towers and typically
+      // delivers a fix within 1–2 s, which is good enough to unblock sends.
+      // We also omit distanceInterval so iOS delivers every available update
+      // without a movement-threshold gate.
       try {
-        const initial = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.High,
-        });
-        // Only apply if the watcher hasn't already delivered a fresher fix.
-        setState((prev) => {
-          if (prev.status === "ready") return prev; // watcher already won
-          return {
-            status: "ready",
-            coords: {
-              latitude: initial.coords.latitude,
-              longitude: initial.coords.longitude,
-            },
-          };
-        });
-      } catch {
-        // Transient failure — watcher will still deliver coords; stay in
-        // "requesting" state until it does rather than showing an error.
+        watcher = await Location.watchPositionAsync(
+          { accuracy: Location.Accuracy.Balanced },
+          (loc) => {
+            setState({
+              status: "ready",
+              coords: {
+                latitude: loc.coords.latitude,
+                longitude: loc.coords.longitude,
+              },
+            });
+          },
+        );
+      } catch (watchErr) {
+        console.warn("[GPS] watchPositionAsync failed:", watchErr);
+        setState({ status: "error", message: String(watchErr) });
+        return;
       }
+
+      // ── Stage 2: one-shot high-accuracy upgrade ────────────────────────────
+      // Runs in the background after the watcher is live. Failure is silently
+      // ignored — the Balanced watcher fix is already usable.
+      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High })
+        .then((fix) => {
+          setState((prev) => {
+            if (prev.status !== "ready") return prev;
+            return {
+              status: "ready",
+              coords: {
+                latitude: fix.coords.latitude,
+                longitude: fix.coords.longitude,
+              },
+            };
+          });
+        })
+        .catch(() => {
+          /* high-accuracy shot failed — keep watcher's coarse fix */
+        });
     })();
 
     return () => {

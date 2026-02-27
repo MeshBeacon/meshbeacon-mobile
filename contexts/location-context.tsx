@@ -9,9 +9,8 @@
  *     before the first fix arrives or if the initial fix throws.
  */
 
+import { useLocation, type GpsState } from "@/hooks/use-location";
 import React, { createContext, useContext } from "react";
-import { type GpsState } from "@/hooks/use-location";
-import { useLocation } from "@/hooks/use-location";
 
 const LocationContext = createContext<GpsState>({ status: "idle" });
 

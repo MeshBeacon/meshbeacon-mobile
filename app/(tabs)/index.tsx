@@ -12,10 +12,10 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { SerialStatusBanner } from "@/components/serial-status-banner";
+import { useLocationCtx } from "@/contexts/location-context";
 import { useSerial } from "@/contexts/serial-context";
 import { useToast } from "@/contexts/toast-context";
 import { useEsp32Data } from "@/hooks/use-esp32-data";
-import { useLocationCtx } from "@/contexts/location-context";
 
 export default function HomeScreen() {
   const router = useRouter();

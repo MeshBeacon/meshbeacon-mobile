@@ -15,10 +15,10 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { SerialStatusBanner } from "@/components/serial-status-banner";
+import { useLocationCtx } from "@/contexts/location-context";
 import { useMessageStoreCtx } from "@/contexts/message-store-context";
 import { useSerial } from "@/contexts/serial-context";
 import { useToast } from "@/contexts/toast-context";
-import { useLocationCtx } from "@/contexts/location-context";
 
 const URGENCY_OPTIONS = ["Low", "Medium", "Critical"] as const;
 type UrgencyOption = (typeof URGENCY_OPTIONS)[number];
@@ -77,7 +77,10 @@ export default function MessagesScreen() {
 
   // Only block sending while GPS is actively in-flight.
   // If permission was denied or errored, allow sending without location.
-  const gpsAcquiring = attachGps && gps.status === "requesting";
+  // Block send while GPS hasn't produced its first fix yet.
+  // "idle" = LocationProvider effect hasn't run yet; "requesting" = acquiring.
+  const gpsAcquiring =
+    attachGps && (gps.status === "idle" || gps.status === "requesting");
 
   const formatTime = (ts: number) => {
     const d = new Date(ts);

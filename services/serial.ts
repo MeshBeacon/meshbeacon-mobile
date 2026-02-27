@@ -12,10 +12,10 @@ import { Platform } from "react-native";
 import type { OpenOptions } from "react-native-usb-serialport-for-android";
 import type UsbSerial from "react-native-usb-serialport-for-android/lib/typescript/usb_serial";
 import type {
-  FrameCallback,
-  ITransport,
-  StatusCallback,
-  TransportStatus,
+    FrameCallback,
+    ITransport,
+    StatusCallback,
+    TransportStatus,
 } from "./transport";
 import { LineBuffer, parseIncomingLine } from "./transport";
 
@@ -25,9 +25,10 @@ const _androidSerial =
   Platform.OS === "android"
     ? require("react-native-usb-serialport-for-android")
     : null;
-const UsbSerialManager: typeof import("react-native-usb-serialport-for-android")["UsbSerialManager"] | null =
-  _androidSerial?.UsbSerialManager ?? null;
-const Parity: typeof import("react-native-usb-serialport-for-android")["Parity"] =
+const UsbSerialManager:
+  | (typeof import("react-native-usb-serialport-for-android"))["UsbSerialManager"]
+  | null = _androidSerial?.UsbSerialManager ?? null;
+const Parity: (typeof import("react-native-usb-serialport-for-android"))["Parity"] =
   _androidSerial?.Parity ?? { None: 0, Odd: 1, Even: 2, Mark: 3, Space: 4 };
 
 const DEFAULT_OPTIONS: OpenOptions = {
