@@ -317,6 +317,9 @@ class BleService implements ITransport {
     const lng = opts.location ? opts.location.longitude.toFixed(6) : "none";
     const text = opts.text.replace(/,/g, ";").trim();
     const frame = `${FRAME_SOURCE}:MSG,URGENCY:${urgencyCode},LAT:${lat},LNG:${lng},TEXT:${text}`;
+    console.log("[BLE/sendMessage] location received:", opts.location ?? "none");
+    console.log("[BLE/sendMessage] frame to send:", frame);
+    console.log("[BLE/sendMessage] mtuPayload:", this.mtuPayload, "encodedLen:", Math.ceil((frame.length + 1) / 3) * 4);
     await this.sendRaw(frame);
   }
 

@@ -39,6 +39,7 @@ export function useLocation(enabled = true) {
       try {
         const last = await Location.getLastKnownPositionAsync();
         if (last) {
+          console.log("[GPS] last known position:", last.coords.latitude, last.coords.longitude);
           setState({
             status: "ready",
             coords: {
@@ -46,6 +47,8 @@ export function useLocation(enabled = true) {
               longitude: last.coords.longitude,
             },
           });
+        } else {
+          console.log("[GPS] no last known position cached");
         }
       } catch {
         // Device has no cached position yet — watcher will deliver one shortly.
@@ -61,6 +64,7 @@ export function useLocation(enabled = true) {
         watcher = await Location.watchPositionAsync(
           { accuracy: Location.Accuracy.Balanced },
           (loc) => {
+            console.log("[GPS] watcher callback:", loc.coords.latitude, loc.coords.longitude);
             setState({
               status: "ready",
               coords: {

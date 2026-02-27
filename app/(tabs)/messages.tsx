@@ -104,8 +104,10 @@ export default function MessagesScreen() {
       showToast("Connect to the ESP32 device first.", "error");
       return;
     }
+    console.log("[MSG/send] attachGps:", attachGps, "gps.status:", gps.status, "coords:", gps.status === "ready" ? gps.coords : null);
     const location =
       attachGps && gps.status === "ready" ? gps.coords : undefined;
+    console.log("[MSG/send] location to be sent:", location ?? "none");
     setSending(true);
     try {
       await sendMessage({
