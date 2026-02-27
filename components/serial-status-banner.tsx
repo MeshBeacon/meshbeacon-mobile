@@ -3,12 +3,12 @@ import { useSerial } from "@/contexts/serial-context";
 import { MaterialIcons } from "@expo/vector-icons";
 import { useState } from "react";
 import {
-  ActivityIndicator,
-  Platform,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
+    ActivityIndicator,
+    Platform,
+    Pressable,
+    StyleSheet,
+    Text,
+    View,
 } from "react-native";
 
 function statusConfig(isBle: boolean) {

@@ -73,17 +73,31 @@ function toBase64(str: string): string {
   return result;
 }
 
-/** Request Android 12+ BLE runtime permissions. Returns true if granted. */
+/** Request Android runtime permissions needed for BLE scanning/connecting.
+ *  Android 12+ (API 31+): BLUETOOTH_SCAN + BLUETOOTH_CONNECT
+ *  Android 6–11 (API 23–30): ACCESS_FINE_LOCATION (required for BLE scan results)
+ *  Returns true only when all required permissions are granted.
+ */
 async function requestAndroidBlePermissions(): Promise<boolean> {
-  if (Platform.OS !== "android" || Platform.Version < 31) return true;
-  const results = await PermissionsAndroid.requestMultiple([
-    PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
-    PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-  ]);
-  return (
-    results[PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN] === "granted" &&
-    results[PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT] === "granted"
-  );
+  if (Platform.OS !== "android") return true;
+
+  if (Platform.Version >= 31) {
+    // Android 12+
+    const results = await PermissionsAndroid.requestMultiple([
+      PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+      PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+    ]);
+    return (
+      results[PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN] === "granted" &&
+      results[PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT] === "granted"
+    );
+  } else {
+    // Android 6–11: BLE scan requires location
+    const result = await PermissionsAndroid.request(
+      PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+    );
+    return result === PermissionsAndroid.RESULTS.GRANTED;
+  }
 }
 
 // ── BLE Service ───────────────────────────────────────────────────────────────
@@ -366,18 +380,21 @@ class BleService implements ITransport {
       timer = setTimeout(() => mgr.stopDeviceScan(), timeoutMs);
     };
 
-    // onStateChange with emitCurrentValue=true fires immediately with the
-    // current adapter state. On iOS the first BleManager creation triggers
-    // a CBCentralManager init that transitions Unknown → PoweredOn over ~1 s.
-    // Waiting here ensures startDeviceScan is only called once the adapter
-    // is ready, which fixes the "first scan finds nothing" issue on iOS.
-    stateSub = mgr.onStateChange((state) => {
-      if (state === State.PoweredOn) {
-        stateSub?.remove();
-        stateSub = null;
-        startScan();
-      }
-    }, true); // true = emit current state immediately
+    // Request Android BLE/location permissions first, then wait for the
+    // adapter to be PoweredOn before starting the scan.
+    // onStateChange with emitCurrentValue=true fires immediately — if the
+    // adapter is already on (typical on Android), startScan() is called
+    // synchronously after permissions resolve.
+    requestAndroidBlePermissions().then((granted) => {
+      if (!granted || stopped) return;
+      stateSub = mgr.onStateChange((state) => {
+        if (state === State.PoweredOn) {
+          stateSub?.remove();
+          stateSub = null;
+          startScan();
+        }
+      }, true); // true = emit current state immediately
+    });
 
     return () => {
       stopped = true;
