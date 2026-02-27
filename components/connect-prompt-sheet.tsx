@@ -1,11 +1,12 @@
 /**
  * ConnectPromptSheet
  *
- * A bottom-sheet modal shown on Android app launch that lets the user pick
- * USB or Bluetooth before the app attempts to connect to the ESP32.
+ * A bottom-sheet modal shown on app launch that prompts the user to connect
+ * to their ClusterDuck device.
  *
- * On iOS this component renders nothing (BLE is the only option and the
- * existing status banner handles connection).
+ * Android: lets the user pick USB or Bluetooth.
+ * iOS:     Bluetooth is the only option, so shows a simpler prompt that goes
+ *          straight to the BLE scan sheet.
  */
 
 import { BleScanSheet } from "@/components/ble-device-picker";
@@ -22,22 +23,93 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-export function ConnectPromptSheet() {
+// ── iOS ── simple Bluetooth-only prompt ──────────────────────────────────────
+
+function IosConnectPrompt() {
+  const { status } = useSerial();
+  const { bottom: bottomInset } = useSafeAreaInsets();
+  const [visible, setVisible] = useState(false);
+  const [bleScanVisible, setBleScanVisible] = useState(false);
+
+  useEffect(() => {
+    if (status === "disconnected") setVisible(true);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleConnect = () => {
+    setVisible(false);
+    setBleScanVisible(true);
+  };
+
+  const handleSkip = () => setVisible(false);
+
+  return (
+    <>
+      <Modal
+        visible={visible}
+        transparent
+        animationType="slide"
+        onRequestClose={handleSkip}
+      >
+        <Pressable style={styles.backdrop} onPress={handleSkip} />
+
+        <View
+          style={[
+            styles.sheet,
+            { paddingBottom: Math.max(36, bottomInset + 16) },
+          ]}
+        >
+          <View style={styles.handle} />
+
+          <View style={styles.iosIconWrap}>
+            <MaterialIcons name="bluetooth" size={36} color="#fff" />
+          </View>
+
+          <Text style={styles.title}>Connect via Bluetooth</Text>
+          <Text style={styles.subtitle}>
+            Scan for a nearby ClusterDuck device to send messages and SOS
+            alerts.
+          </Text>
+
+          <Pressable style={styles.connectBtn} onPress={handleConnect}>
+            <MaterialIcons
+              name="bluetooth-searching"
+              size={18}
+              color="#fff"
+              style={{ marginRight: 6 }}
+            />
+            <Text style={styles.connectBtnText}>Scan for Devices</Text>
+          </Pressable>
+
+          <Pressable style={styles.skipBtn} onPress={handleSkip}>
+            <Text style={styles.skipBtnText}>Skip for now</Text>
+          </Pressable>
+        </View>
+      </Modal>
+
+      <BleScanSheet
+        visible={bleScanVisible}
+        onClose={() => setBleScanVisible(false)}
+      />
+    </>
+  );
+}
+
+// ── Android ── USB / BLE picker ───────────────────────────────────────────────
+
+function AndroidConnectPrompt() {
   const { status, transportMode, setTransportMode, connect } = useSerial();
   const { bottom: bottomInset } = useSafeAreaInsets();
   const [visible, setVisible] = useState(false);
   const [selected, setSelected] = useState<"usb" | "ble">("usb");
   const [bleScanVisible, setBleScanVisible] = useState(false);
 
-  // Show the prompt once on mount (Android only, when not already connected)
+  // Show the prompt once on mount when not already connected
   useEffect(() => {
-    if (Platform.OS === "android" && status === "disconnected") {
+    if (status === "disconnected") {
       setSelected(transportMode);
       setVisible(true);
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  if (Platform.OS !== "android") return null;
 
   const handleConnect = async () => {
     setVisible(false);
@@ -45,16 +117,13 @@ export function ConnectPromptSheet() {
       await setTransportMode(selected);
     }
     if (selected === "ble") {
-      // Open the BLE scan sheet so the user can pick a specific device
       setBleScanVisible(true);
     } else {
       connect();
     }
   };
 
-  const handleSkip = () => {
-    setVisible(false);
-  };
+  const handleSkip = () => setVisible(false);
 
   return (
     <>
@@ -181,6 +250,13 @@ export function ConnectPromptSheet() {
   );
 }
 
+// ── Public export ─────────────────────────────────────────────────────────────
+
+export function ConnectPromptSheet() {
+  if (Platform.OS === "ios") return <IosConnectPrompt />;
+  return <AndroidConnectPrompt />;
+}
+
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
@@ -201,6 +277,16 @@ const styles = StyleSheet.create({
     backgroundColor: "#d1d5db",
     alignSelf: "center",
     marginBottom: 20,
+  },
+  iosIconWrap: {
+    width: 68,
+    height: 68,
+    borderRadius: 20,
+    backgroundColor: "#f27f0d",
+    alignItems: "center",
+    justifyContent: "center",
+    alignSelf: "center",
+    marginBottom: 16,
   },
   title: {
     fontSize: 20,
@@ -266,7 +352,10 @@ const styles = StyleSheet.create({
     backgroundColor: "#f27f0d",
     borderRadius: 12,
     paddingVertical: 14,
+    paddingHorizontal: 20,
+    flexDirection: "row",
     alignItems: "center",
+    justifyContent: "center",
     marginBottom: 10,
   },
   connectBtnText: {
