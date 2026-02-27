@@ -278,9 +278,14 @@ class BleService implements ITransport {
     // as the payload fits within the negotiated ATT MTU payload (mtuPayload).
     // MTU negotiation (requestMTU(512)) typically yields 182–509 usable bytes
     // on modern Android/iOS, far above our 256-byte frame cap.
-    if (payload.length > this.mtuPayload) {
+    // The payload is base64-encoded before writing. base64 expands the data by
+    // 4/3 — the actual bytes on the wire are ceil(N/3)*4, not N.
+    // Check against the encoded size so we never send a write that exceeds the
+    // negotiated ATT MTU payload.
+    const encodedLen = Math.ceil(payload.length / 3) * 4;
+    if (encodedLen > this.mtuPayload) {
       throw new Error(
-        `Frame too large for BLE MTU: ${payload.length} B > ${this.mtuPayload} B. ` +
+        `Frame too large for BLE MTU: ${encodedLen} B (base64) > ${this.mtuPayload} B. ` +
           "Shorten the message or reconnect to renegotiate MTU.",
       );
     }

@@ -31,6 +31,26 @@ export function useLocation(enabled = true) {
         return;
       }
 
+      // ── Stage 0: use the last cached position for instant readiness ─────────
+      // On iOS, CoreLocation may already have a cached fix from a prior session.
+      // getLastKnownPositionAsync() returns it synchronously (no radio wake-up),
+      // so we can transition to "ready" before the first watcher callback fires.
+      // This is the primary reason GPS was missing when the user sent quickly.
+      try {
+        const last = await Location.getLastKnownPositionAsync();
+        if (last) {
+          setState({
+            status: "ready",
+            coords: {
+              latitude: last.coords.latitude,
+              longitude: last.coords.longitude,
+            },
+          });
+        }
+      } catch {
+        // Device has no cached position yet — watcher will deliver one shortly.
+      }
+
       // ── Stage 1: fast coarse fix via WiFi/cell (Balanced) ─────────────────
       // On iOS, Accuracy.High waits for satellite GPS which can take 30–60 s
       // indoors. Accuracy.Balanced uses WiFi + cell towers and typically
