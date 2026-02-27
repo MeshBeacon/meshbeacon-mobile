@@ -29,7 +29,7 @@ export default function HomeScreen() {
   const handleSOS = useCallback(async () => {
     if (status === "disconnected" || status === "error") {
       showToast(
-        "Connect to the ESP32 device first by tapping the banner above.",
+        "Connect to the device first by tapping the banner above.",
         "error",
       );
       return;
@@ -47,7 +47,7 @@ export default function HomeScreen() {
         setSending(true);
         try {
           await sendSOS(location);
-          showToast("Emergency signal transmitted to the ESP32.", "success");
+          showToast("Emergency signal transmitted to the device.", "success");
         } catch (err) {
           showToast((err as Error).message, "error");
         } finally {
@@ -125,7 +125,7 @@ export default function HomeScreen() {
                 <View style={styles.deviceTexts}>
                   <Text style={styles.deviceLabel}>Device ID</Text>
                   <Text style={styles.deviceValue}>
-                    {esp32.deviceId ?? "Waiting for ESP32…"}
+                    {esp32.deviceId ?? "Waiting for device…"}
                   </Text>
                 </View>
               </View>
@@ -157,10 +157,10 @@ export default function HomeScreen() {
                   />
                 </View>
                 <View style={styles.deviceTexts}>
-                  <Text style={styles.deviceLabel}>ESP32 Battery</Text>
+                  <Text style={styles.deviceLabel}>Device Battery</Text>
                   {esp32.battery === null ? (
                     <Text style={[styles.deviceValue, styles.deviceValueMuted]}>
-                      Waiting for ESP32…
+                      Waiting for device…
                     </Text>
                   ) : (
                     <View style={styles.battRow}>

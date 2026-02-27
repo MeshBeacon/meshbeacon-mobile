@@ -21,6 +21,7 @@ import { LineBuffer, parseIncomingLine } from "./transport";
 
 // Load the native module only on Android. On iOS the module does not exist and
 // accessing it would throw "Cannot read property 'getConstants' of null".
+ 
 const _androidSerial =
   Platform.OS === "android"
     ? require("react-native-usb-serialport-for-android")
@@ -61,6 +62,7 @@ class SerialService implements ITransport {
   private startDisconnectPoll() {
     this._pollTimer = setInterval(async () => {
       if (this._status !== "connected" || this.deviceId === null) return;
+      if (!UsbSerialManager) return; // only reachable on Android
       try {
         const devices = await UsbSerialManager.list();
         const stillConnected = devices.some(

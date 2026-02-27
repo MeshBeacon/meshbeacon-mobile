@@ -39,7 +39,11 @@ export function useLocation(enabled = true) {
       try {
         const last = await Location.getLastKnownPositionAsync();
         if (last) {
-          console.log("[GPS] last known position:", last.coords.latitude, last.coords.longitude);
+          console.log(
+            "[GPS] last known position:",
+            last.coords.latitude,
+            last.coords.longitude,
+          );
           setState({
             status: "ready",
             coords: {
@@ -64,7 +68,11 @@ export function useLocation(enabled = true) {
         watcher = await Location.watchPositionAsync(
           { accuracy: Location.Accuracy.Balanced },
           (loc) => {
-            console.log("[GPS] watcher callback:", loc.coords.latitude, loc.coords.longitude);
+            console.log(
+              "[GPS] watcher callback:",
+              loc.coords.latitude,
+              loc.coords.longitude,
+            );
             setState({
               status: "ready",
               coords: {

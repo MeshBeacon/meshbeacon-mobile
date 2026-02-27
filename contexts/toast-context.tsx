@@ -10,12 +10,15 @@ import React, {
     createContext,
     useCallback,
     useContext,
+    useEffect,
     useRef,
     useState,
 } from "react";
 import {
     Animated,
+    Keyboard,
     Modal,
+    Platform,
     Pressable,
     StyleSheet,
     Text,
@@ -70,7 +73,26 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   const { bottom } = useSafeAreaInsets();
   const [toasts, setToasts] = useState<ToastEntry[]>([]);
   const [confirm, setConfirm] = useState<ConfirmOptions | null>(null);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
   const idRef = useRef(0);
+
+  // Shift toasts above the keyboard so they're never hidden behind it.
+  // iOS fires keyboardWillShow/Hide (smoother); Android uses keyboardDidShow/Hide.
+  useEffect(() => {
+    const showEvent =
+      Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+    const hideEvent =
+      Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
+    const onShow = (e: { endCoordinates: { height: number } }) =>
+      setKeyboardHeight(e.endCoordinates.height);
+    const onHide = () => setKeyboardHeight(0);
+    const subShow = Keyboard.addListener(showEvent, onShow);
+    const subHide = Keyboard.addListener(hideEvent, onHide);
+    return () => {
+      subShow.remove();
+      subHide.remove();
+    };
+  }, []);
 
   // ── Toast ──────────────────────────────────────────────────────────────────
 
@@ -156,7 +178,15 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
 
       {/* ── Toast Stack ── */}
       <View
-        style={[styles.toastContainer, { bottom: Math.max(bottom + 16, 32) }]}
+        style={[
+          styles.toastContainer,
+          {
+            bottom:
+              keyboardHeight > 0
+                ? keyboardHeight + 12 // sit just above the keyboard
+                : Math.max(bottom + 16, 32), // normal safe-area offset
+          },
+        ]}
         pointerEvents="none"
       >
         {toasts.map((toast) => {

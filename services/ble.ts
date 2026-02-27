@@ -317,9 +317,17 @@ class BleService implements ITransport {
     const lng = opts.location ? opts.location.longitude.toFixed(6) : "none";
     const text = opts.text.replace(/,/g, ";").trim();
     const frame = `${FRAME_SOURCE}:MSG,URGENCY:${urgencyCode},LAT:${lat},LNG:${lng},TEXT:${text}`;
-    console.log("[BLE/sendMessage] location received:", opts.location ?? "none");
+    console.log(
+      "[BLE/sendMessage] location received:",
+      opts.location ?? "none",
+    );
     console.log("[BLE/sendMessage] frame to send:", frame);
-    console.log("[BLE/sendMessage] mtuPayload:", this.mtuPayload, "encodedLen:", Math.ceil((frame.length + 1) / 3) * 4);
+    console.log(
+      "[BLE/sendMessage] mtuPayload:",
+      this.mtuPayload,
+      "encodedLen:",
+      Math.ceil((frame.length + 1) / 3) * 4,
+    );
     await this.sendRaw(frame);
   }
 
@@ -336,25 +344,46 @@ class BleService implements ITransport {
   ): () => void {
     const seen = new Set<string>();
     const mgr = this.getManager();
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let stateSub: { remove: () => void } | null = null;
 
-    mgr.startDeviceScan(
-      null, // no UUID filter — NimBLE puts 128-bit UUIDs in scan response, not ad packet
-      { allowDuplicates: false },
-      (err, device) => {
-        if (err || !device) return;
-        const name = device.name ?? device.localName;
-        // Only show devices whose name looks like a ClusterDuck device
-        if (!seen.has(device.id) && name && isClusterDuckDevice(name)) {
-          seen.add(device.id);
-          onFound({ id: device.id, name, rssi: device.rssi ?? -99 });
-        }
-      },
-    );
+    const startScan = () => {
+      if (stopped) return;
+      mgr.startDeviceScan(
+        null, // no UUID filter — NimBLE puts 128-bit UUIDs in scan response, not ad packet
+        { allowDuplicates: false },
+        (err, device) => {
+          if (err || !device) return;
+          const name = device.name ?? device.localName;
+          // Only show devices whose name looks like a ClusterDuck device
+          if (!seen.has(device.id) && name && isClusterDuckDevice(name)) {
+            seen.add(device.id);
+            onFound({ id: device.id, name, rssi: device.rssi ?? -99 });
+          }
+        },
+      );
+      timer = setTimeout(() => mgr.stopDeviceScan(), timeoutMs);
+    };
 
-    const timer = setTimeout(() => mgr.stopDeviceScan(), timeoutMs);
+    // onStateChange with emitCurrentValue=true fires immediately with the
+    // current adapter state. On iOS the first BleManager creation triggers
+    // a CBCentralManager init that transitions Unknown → PoweredOn over ~1 s.
+    // Waiting here ensures startDeviceScan is only called once the adapter
+    // is ready, which fixes the "first scan finds nothing" issue on iOS.
+    stateSub = mgr.onStateChange((state) => {
+      if (state === State.PoweredOn) {
+        stateSub?.remove();
+        stateSub = null;
+        startScan();
+      }
+    }, true); // true = emit current state immediately
 
     return () => {
-      clearTimeout(timer);
+      stopped = true;
+      stateSub?.remove();
+      stateSub = null;
+      if (timer !== null) clearTimeout(timer);
       mgr.stopDeviceScan();
     };
   }

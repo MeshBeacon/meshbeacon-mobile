@@ -99,10 +99,17 @@ export default function MessagesScreen() {
       return;
     }
     if (status === "disconnected" || status === "error") {
-      showToast("Connect to the ESP32 device first.", "error");
+      showToast("Connect to the device first.", "error");
       return;
     }
-    console.log("[MSG/send] attachGps:", attachGps, "gps.status:", gps.status, "coords:", gps.status === "ready" ? gps.coords : null);
+    console.log(
+      "[MSG/send] attachGps:",
+      attachGps,
+      "gps.status:",
+      gps.status,
+      "coords:",
+      gps.status === "ready" ? gps.coords : null,
+    );
     const location =
       attachGps && gps.status === "ready" ? gps.coords : undefined;
     console.log("[MSG/send] location to be sent:", location ?? "none");

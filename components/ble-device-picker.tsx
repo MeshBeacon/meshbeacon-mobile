@@ -88,7 +88,7 @@ export function BleScanSheet({ visible, onClose }: Props) {
             />
             <Text style={styles.emptyText}>No devices found yet</Text>
             <Text style={styles.emptyHint}>
-              Make sure the ESP32 is powered on and nearby
+              Make sure the device is powered on and nearby
             </Text>
           </View>
         ) : (

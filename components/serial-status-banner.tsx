@@ -16,22 +16,22 @@ function statusConfig(isBle: boolean) {
   return {
     disconnected: {
       label: isBle
-        ? "ESP32 not found via Bluetooth"
-        : "ESP32 not connected via USB",
+        ? "Device not found via Bluetooth"
+        : "Device not connected via USB",
       action: "Connect",
       bg: "#fee2e2",
       text: "#b91c1c",
       icon: deviceIcon,
     },
     scanning: {
-      label: "Scanning for ESP32 via Bluetooth…",
+      label: "Scanning for device via Bluetooth…",
       action: null,
       bg: "#fef9c3",
       text: "#854d0e",
       icon: "bluetooth-searching" as const,
     },
     connecting: {
-      label: isBle ? "Pairing with ESP32…" : "Connecting to ESP32…",
+      label: isBle ? "Pairing with device…" : "Connecting to device…",
       action: null,
       bg: "#fef9c3",
       text: "#854d0e",
@@ -39,8 +39,8 @@ function statusConfig(isBle: boolean) {
     },
     connected: {
       label: isBle
-        ? "ESP32 connected via Bluetooth"
-        : "ESP32 connected via USB",
+        ? "Device connected via Bluetooth"
+        : "Device connected via USB",
       action: null,
       bg: "#dcfce7",
       text: "#15803d",

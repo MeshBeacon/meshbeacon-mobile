@@ -128,18 +128,18 @@ Sent when the user composes and sends a message.
 CDK:MSG,URGENCY:<level>,LAT:<latitude>,LNG:<longitude>,TEXT:<text>\n
 ```
 
-| Field     | Values                        | Notes                    |
-| --------- | ----------------------------- | ------------------------ |
-| `URGENCY` | `low` / `medium` / `critical` |                          |
-| `LAT`     | float string or `none`        |                          |
-| `LNG`     | float string or `none`        |                          |
-| `TEXT`    | ASCII string                  | Commas replaced with `;` |
+| Field     | Values                 | Notes                             |
+| --------- | ---------------------- | --------------------------------- |
+| `URGENCY` | `0` / `1` / `2`        | 0 = low, 1 = medium, 2 = critical |
+| `LAT`     | float string or `none` |                                   |
+| `LNG`     | float string or `none` |                                   |
+| `TEXT`    | ASCII string           | Commas replaced with `;`          |
 
 Examples:
 
 ```
-CDK:MSG,URGENCY:critical,LAT:3.140000,LNG:101.686000,TEXT:Need medical help immediately\n
-CDK:MSG,URGENCY:low,LAT:none,LNG:none,TEXT:All clear; heading back to base\n
+CDK:MSG,URGENCY:2,LAT:3.140000,LNG:101.686000,TEXT:Need medical help immediately\n
+CDK:MSG,URGENCY:0,LAT:none,LNG:none,TEXT:All clear; heading back to base\n
 ```
 
 #### PING — Device ID Request

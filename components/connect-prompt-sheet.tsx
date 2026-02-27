@@ -74,7 +74,7 @@ export function ConnectPromptSheet() {
         >
           <View style={styles.handle} />
 
-          <Text style={styles.title}>Connect to ESP32</Text>
+          <Text style={styles.title}>Connect to Device</Text>
           <Text style={styles.subtitle}>
             How do you want to connect to your device?
           </Text>
