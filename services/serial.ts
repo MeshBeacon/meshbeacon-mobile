@@ -21,7 +21,7 @@ import { LineBuffer, parseIncomingLine } from "./transport";
 
 // Load the native module only on Android. On iOS the module does not exist and
 // accessing it would throw "Cannot read property 'getConstants' of null".
- 
+
 const _androidSerial =
   Platform.OS === "android"
     ? require("react-native-usb-serialport-for-android")
@@ -260,6 +260,26 @@ class SerialService implements ITransport {
     const text = opts.text.replace(/,/g, ";").trim();
     const frame = `${FRAME_SOURCE}:MSG,URGENCY:${urgencyCode},LAT:${lat},LNG:${lng},TEXT:${text}`;
     await this.sendRaw(frame);
+  }
+
+  /**
+   * Send a direct MamaDuck-to-MamaDuck chat message (LoRa topic 26, MTALK).
+   * targetId must be exactly 8 characters — the DUCK_NAME of the remote MamaDuck.
+   */
+  async sendMTalk(
+    targetId: string,
+    text: string,
+    location?: { latitude: number; longitude: number },
+  ): Promise<void> {
+    if (targetId.length !== 8) {
+      throw new Error("MTALK target ID must be exactly 8 characters.");
+    }
+    const sanitised = text.replace(/,/g, ";").trim();
+    const lat = location ? location.latitude.toFixed(6) : "none";
+    const lng = location ? location.longitude.toFixed(6) : "none";
+    await this.sendRaw(
+      `${FRAME_SOURCE}:MTALK,TARGET:${targetId},LAT:${lat},LNG:${lng},TEXT:${sanitised}`,
+    );
   }
 }
 

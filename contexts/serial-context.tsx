@@ -1,16 +1,16 @@
 import {
-  defaultTransportMode,
-  serviceForMode,
-  type TransportStatus,
+    defaultTransportMode,
+    serviceForMode,
+    type TransportStatus,
 } from "@/services";
 import { bleService } from "@/services/ble";
 import React, {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useRef,
-  useState,
+    createContext,
+    useCallback,
+    useContext,
+    useEffect,
+    useRef,
+    useState,
 } from "react";
 
 export type TransportMode = "usb" | "ble";
@@ -31,6 +31,11 @@ interface SerialContextValue {
     urgency: "low" | "medium" | "critical";
     location?: { latitude: number; longitude: number };
   }) => Promise<void>;
+  sendMTalk: (
+    targetId: string,
+    text: string,
+    location?: { latitude: number; longitude: number },
+  ) => Promise<void>;
 }
 
 const SerialContext = createContext<SerialContextValue>({
@@ -42,6 +47,7 @@ const SerialContext = createContext<SerialContextValue>({
   connectToBleDevice: async () => false,
   sendSOS: async () => {},
   sendMessage: async () => {},
+  sendMTalk: async () => {},
 });
 
 export function SerialProvider({ children }: { children: React.ReactNode }) {
@@ -95,6 +101,14 @@ export function SerialProvider({ children }: { children: React.ReactNode }) {
     }) => serviceForMode(mode).sendMessage(opts),
     [mode],
   );
+  const sendMTalk = useCallback(
+    (
+      targetId: string,
+      text: string,
+      location?: { latitude: number; longitude: number },
+    ) => serviceForMode(mode).sendMTalk(targetId, text, location),
+    [mode],
+  );
 
   return (
     <SerialContext.Provider
@@ -107,6 +121,7 @@ export function SerialProvider({ children }: { children: React.ReactNode }) {
         connectToBleDevice,
         sendSOS,
         sendMessage,
+        sendMTalk,
       }}
     >
       {children}

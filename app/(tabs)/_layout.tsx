@@ -36,6 +36,24 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="chat"
+        options={{
+          title: "Direct Chat",
+          tabBarIcon: ({ color, size }) => (
+            <MaterialIcons name="swap-horiz" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="map"
+        options={{
+          title: "Map",
+          tabBarIcon: ({ color, size }) => (
+            <MaterialIcons name="map" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="settings"
         options={{
           title: "Settings",

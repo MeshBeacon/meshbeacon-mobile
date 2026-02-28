@@ -12,6 +12,7 @@
  */
 
 import { useBroadcastStoreCtx } from "@/contexts/broadcast-store-context";
+import { useChatStoreCtx } from "@/contexts/chat-store-context";
 import { useMessageStoreCtx } from "@/contexts/message-store-context";
 import { useSerial } from "@/contexts/serial-context";
 import type { StoredBroadcast } from "@/hooks/use-broadcast-store";
@@ -26,6 +27,7 @@ import type {
     IdFrame,
     IncomingFrame,
     MsgFrame,
+    MTalkFrame,
     StatusFrame,
 } from "@/services/transport";
 import { useEffect, useReducer } from "react";
@@ -108,6 +110,10 @@ function reduce(state: ReducerState, action: Action): ReducerState {
       // Persisted via BroadcastStore — only update lastFrame in the reducer
       return { ...state, lastFrame: frame };
     }
+    case "MTALK": {
+      // Persisted via ChatStore — only update lastFrame in the reducer
+      return { ...state, lastFrame: frame };
+    }
     case "SOS": {
       const sos = frame as DeviceSosFrame;
       return {
@@ -125,6 +131,7 @@ export function useEsp32Data(): Esp32Data {
   const [state, dispatch] = useReducer(reduce, initial);
   const { addReceived } = useMessageStoreCtx();
   const { broadcasts, addBroadcast } = useBroadcastStoreCtx();
+  const { addReceived: addChatReceived } = useChatStoreCtx();
   const { transportMode, status } = useSerial();
   const { notifyNewMessage, notifyDeviceSOS, notifyEmergencyBroadcast } =
     useMessageNotifications();
@@ -150,6 +157,12 @@ export function useEsp32Data(): Esp32Data {
         addBroadcast(bcast.text, bcast.receivedAt);
         notifyEmergencyBroadcast(bcast.text);
       }
+      if (frame.type === "MTALK") {
+        const talk = frame as MTalkFrame;
+        const coords =
+          talk.lat && talk.lng ? { lat: talk.lat, lng: talk.lng } : undefined;
+        addChatReceived(talk.text, coords);
+      }
       if (
         frame.type === "SOS" &&
         (frame as DeviceSosFrame).source === "DEVICE"
@@ -157,7 +170,15 @@ export function useEsp32Data(): Esp32Data {
         notifyDeviceSOS((frame as DeviceSosFrame).deviceId);
       }
     });
-  }, [addReceived, addBroadcast, transportMode]);
+  }, [
+    addReceived,
+    addBroadcast,
+    addChatReceived,
+    notifyNewMessage,
+    notifyEmergencyBroadcast,
+    notifyDeviceSOS,
+    transportMode,
+  ]);
 
   return { ...state, broadcastAlerts: broadcasts };
 }

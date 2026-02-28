@@ -62,6 +62,20 @@ export type DeviceSosFrame = {
   lng: string;
   receivedAt: number;
 };
+/**
+ * Direct MamaDuck-to-MamaDuck chat message (LoRa topic 26).
+ * Received when another MamaDuck sends an MTALK packet addressed to this duck.
+ * `lat` and `lng` are present when the sender attached their GPS location.
+ */
+export type MTalkFrame = {
+  type: "MTALK";
+  text: string;
+  /** GPS latitude string, e.g. "3.140000", or "none" / undefined when not sent. */
+  lat?: string;
+  /** GPS longitude string, e.g. "101.686000", or "none" / undefined when not sent. */
+  lng?: string;
+  receivedAt: number;
+};
 export type UnknownFrame = { type: string; raw: string };
 
 export type IncomingFrame =
@@ -73,6 +87,7 @@ export type IncomingFrame =
   | MsgFrame
   | BcastFrame
   | DeviceSosFrame
+  | MTalkFrame
   | UnknownFrame;
 
 export type FrameCallback = (frame: IncomingFrame) => void;
@@ -134,6 +149,17 @@ export function parseIncomingLine(line: string): IncomingFrame | null {
         lng: fields["LNG"] ?? "none",
         receivedAt: Date.now(),
       };
+    case "MTALK": {
+      const lat = fields["LAT"];
+      const lng = fields["LNG"];
+      return {
+        type: "MTALK",
+        text: fields["TEXT"] ?? rest,
+        ...(lat && lat !== "none" ? { lat } : {}),
+        ...(lng && lng !== "none" ? { lng } : {}),
+        receivedAt: Date.now(),
+      };
+    }
   }
 
   return { type, raw: trimmed };
@@ -187,4 +213,15 @@ export interface ITransport {
     urgency: "low" | "medium" | "critical";
     location?: { latitude: number; longitude: number };
   }): Promise<void>;
+
+  /**
+   * Send a direct MamaDuck-to-MamaDuck chat message (MTALK, LoRa topic 26).
+   * targetId must be exactly 8 characters — the DUCK_NAME of the remote MamaDuck.
+   * Optionally attach GPS coordinates so the recipient knows the sender's position.
+   */
+  sendMTalk(
+    targetId: string,
+    text: string,
+    location?: { latitude: number; longitude: number },
+  ): Promise<void>;
 }
