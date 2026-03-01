@@ -299,7 +299,7 @@ export default function HomeScreen() {
           <View style={styles.incomingCard}>
             <View style={styles.incomingHeader}>
               <MaterialIcons name="move-to-inbox" size={16} color="#f27f0d" />
-              <Text style={styles.incomingTitle}>Incoming Messages</Text>
+              <Text style={styles.incomingTitle}>Incoming Alerts</Text>
               {esp32.incomingMessages.length > 0 && (
                 <View style={styles.incomingBadge}>
                   <Text style={styles.incomingBadgeText}>
@@ -312,10 +312,10 @@ export default function HomeScreen() {
               <View style={styles.incomingEmpty}>
                 <MaterialIcons name="inbox" size={28} color="#d1c5b8" />
                 <Text style={styles.incomingEmptyText}>
-                  No messages received yet
+                  No alerts received yet
                 </Text>
                 <Text style={styles.incomingEmptyHint}>
-                  Messages relayed over LoRa will appear here
+                  Alerts relayed over LoRa will appear here
                 </Text>
               </View>
             ) : (
@@ -342,7 +342,7 @@ export default function HomeScreen() {
                     <Text style={styles.incomingToggleText}>
                       {showAllMessages
                         ? "Show less"
-                        : `Show all ${esp32.incomingMessages.length} messages`}
+                        : `Show all ${esp32.incomingMessages.length} alerts`}
                     </Text>
                     <MaterialIcons
                       name={showAllMessages ? "expand-less" : "expand-more"}

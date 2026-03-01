@@ -66,7 +66,7 @@ export function useLocation(enabled = true) {
       // without a movement-threshold gate.
       try {
         watcher = await Location.watchPositionAsync(
-          { accuracy: Location.Accuracy.Balanced },
+          { accuracy: Location.Accuracy.Balanced, distanceInterval: 10 },
           (loc) => {
             console.log(
               "[GPS] watcher callback:",

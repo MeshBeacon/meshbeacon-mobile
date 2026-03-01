@@ -270,6 +270,7 @@ class SerialService implements ITransport {
     targetId: string,
     text: string,
     location?: { latitude: number; longitude: number },
+    mid?: string,
   ): Promise<void> {
     if (targetId.length !== 8) {
       throw new Error("MTALK target ID must be exactly 8 characters.");
@@ -277,8 +278,9 @@ class SerialService implements ITransport {
     const sanitised = text.replace(/,/g, ";").trim();
     const lat = location ? location.latitude.toFixed(6) : "none";
     const lng = location ? location.longitude.toFixed(6) : "none";
+    const midSuffix = mid ? `,MID:${mid}` : "";
     await this.sendRaw(
-      `${FRAME_SOURCE}:MTALK,TARGET:${targetId},LAT:${lat},LNG:${lng},TEXT:${sanitised}`,
+      `${FRAME_SOURCE}:MTALK,TARGET:${targetId},LAT:${lat},LNG:${lng},TEXT:${sanitised}${midSuffix}`,
     );
   }
 }

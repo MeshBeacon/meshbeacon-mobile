@@ -150,7 +150,7 @@ export default function MessagesScreen() {
         <View style={styles.container}>
           {/* ── Header ── */}
           <View style={styles.header}>
-            <Text style={styles.title}>Messages</Text>
+            <Text style={styles.title}>Alert</Text>
             <MaterialIcons name="emergency-share" size={20} color="#f27f0d" />
           </View>
 
@@ -170,9 +170,9 @@ export default function MessagesScreen() {
             {loaded && messages.length === 0 && (
               <View style={styles.emptyState}>
                 <MaterialIcons name="forum" size={40} color="#d1c5b8" />
-                <Text style={styles.emptyTitle}>No messages yet</Text>
+                <Text style={styles.emptyTitle}>No alerts yet</Text>
                 <Text style={styles.emptyHint}>
-                  Sent and received messages will appear here
+                  Sent and received emergency alerts will appear here
                 </Text>
               </View>
             )}

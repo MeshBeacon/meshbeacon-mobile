@@ -29,18 +29,18 @@ export default function TabLayout() {
       <Tabs.Screen
         name="messages"
         options={{
-          title: "Messages",
+          title: "Alert",
           tabBarIcon: ({ color, size }) => (
-            <MaterialIcons name="chat" size={size} color={color} />
+            <MaterialIcons name="campaign" size={size} color={color} />
           ),
         }}
       />
       <Tabs.Screen
         name="chat"
         options={{
-          title: "Direct Chat",
+          title: "Nearby",
           tabBarIcon: ({ color, size }) => (
-            <MaterialIcons name="swap-horiz" size={size} color={color} />
+            <MaterialIcons name="cell-tower" size={size} color={color} />
           ),
         }}
       />

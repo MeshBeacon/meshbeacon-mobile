@@ -19,6 +19,8 @@ export function useMessageNotifications() {
         shouldShowAlert: true,
         shouldPlaySound: true,
         shouldSetBadge: true,
+        shouldShowBanner: true,
+        shouldShowList: true,
       }),
     });
 
@@ -63,5 +65,28 @@ export function useMessageNotifications() {
     });
   }
 
-  return { notifyNewMessage, notifyDeviceSOS, notifyEmergencyBroadcast };
+  async function notifyDirectMessage(peerId: string, text: string) {
+    if (!permissionGranted.current) return;
+    // Map protocol sentinels to human-readable strings
+    let body = text;
+    if (text === "[LOC]") body = "📍 Sent a location update";
+    else if (text === "[TRACK_REQ]") body = "📡 Wants to share their location";
+    else if (text === "[TRACK_OK]") body = "✅ Accepted location tracking";
+    else if (text === "[TRACK_NO]") body = "🚫 Declined location tracking";
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title: `💬 New message from ${peerId}`,
+        body,
+        sound: true,
+      },
+      trigger: null,
+    });
+  }
+
+  return {
+    notifyNewMessage,
+    notifyDeviceSOS,
+    notifyEmergencyBroadcast,
+    notifyDirectMessage,
+  };
 }

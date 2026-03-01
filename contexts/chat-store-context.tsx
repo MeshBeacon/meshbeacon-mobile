@@ -1,20 +1,37 @@
 import { createContext, useContext, type ReactNode } from "react";
 
-import { useChatStore, type ChatMessage } from "@/hooks/use-chat-store";
+import {
+    useChatStore,
+    type ChatMessage,
+    type Conversation,
+} from "@/hooks/use-chat-store";
 
 interface ChatStoreCtx {
-  messages: ChatMessage[];
+  /** All conversations sorted newest-first — use for the inbox screen. */
+  conversations: Conversation[];
   loaded: boolean;
-  targetPeer: string;
-  setTargetPeer: (peer: string) => void;
   addSent: (
+    peerId: string,
     text: string,
     location?: { latitude: number; longitude: number },
+    mid?: string,
   ) => ChatMessage;
   addReceived: (
+    peerId: string,
     text: string,
     coords?: { lat: string; lng: string },
   ) => ChatMessage;
+  /** Get the full message list for one peer thread. */
+  getMessages: (peerId: string) => ChatMessage[];
+  /** Clear unread badge when the user opens a thread. */
+  markRead: (peerId: string) => void;
+  /** Bump unread counter for a peer on incoming MTALK. */
+  incrementUnread: (peerId: string) => void;
+  /** Mark a sent message as delivered when a CDK:MACK receipt arrives. */
+  markDelivered: (mid: string) => void;
+  /** Delete all messages for one peer. */
+  clearThread: (peerId: string) => void;
+  /** Delete every thread and wipe from disk. */
   clearAll: () => Promise<void>;
 }
 

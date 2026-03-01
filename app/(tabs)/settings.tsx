@@ -15,20 +15,11 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { useToast } from "@/contexts/toast-context";
-
-type Contact = {
-  id: string;
-  name: string;
-  relationship: string;
-  phone: string;
-  isPrimary: boolean;
-};
-
-type ProfileInfo = {
-  name: string;
-  bloodType: string;
-  allergies: string;
-};
+import {
+    useSettingsStore,
+    type Contact,
+    type ProfileInfo,
+} from "@/hooks/use-settings-store";
 
 const BLOOD_TYPES = [
   "A Positive",
@@ -41,30 +32,9 @@ const BLOOD_TYPES = [
   "O Negative",
 ];
 
-const INITIAL_CONTACTS: Contact[] = [
-  {
-    id: "1",
-    name: "Jane Doe",
-    relationship: "Wife",
-    phone: "(555) 012-3456",
-    isPrimary: true,
-  },
-  {
-    id: "2",
-    name: "Robert Smith",
-    relationship: "Brother",
-    phone: "(555) 987-6543",
-    isPrimary: false,
-  },
-];
-
 export default function SettingsScreen() {
   const { showToast, showConfirm } = useToast();
-  const [profile, setProfile] = useState<ProfileInfo>({
-    name: "John Doe",
-    bloodType: "O Positive",
-    allergies: "Penicillin",
-  });
+  const { profile, setProfile, contacts, setContacts } = useSettingsStore();
   const [profileModalVisible, setProfileModalVisible] = useState(false);
   const [profileDraft, setProfileDraft] = useState<ProfileInfo>(profile);
 
@@ -82,7 +52,6 @@ export default function SettingsScreen() {
     setProfileModalVisible(false);
   };
 
-  const [contacts, setContacts] = useState<Contact[]>(INITIAL_CONTACTS);
   const [editingContact, setEditingContact] = useState<Contact | null>(null);
   const [modalVisible, setModalVisible] = useState(false);
   const [draft, setDraft] = useState<Omit<Contact, "id" | "isPrimary">>({

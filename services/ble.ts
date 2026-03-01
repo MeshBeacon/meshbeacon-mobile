@@ -50,12 +50,15 @@ export interface ScannedDevice {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/** Encode a UTF-8/ASCII string to base64 (BLE-PLX requires base64). */
+/** Encode a plain ASCII string to base64 (BLE-PLX requires base64). */
 function toBase64(str: string): string {
-  // React Native bundles a global `btoa`; use it if available, fall back manually.
-  if (typeof btoa !== "undefined")
-    return btoa(unescape(encodeURIComponent(str)));
-  // Manual fallback (pure-ASCII only)
+  // All CDK frames are pure ASCII (0–127).  btoa() handles ASCII natively
+  // and is available on both JavaScriptCore (iOS) and Hermes (Android ≥ RN 0.71).
+  // Using btoa(str) directly — without the unescape(encodeURIComponent()) wrapper
+  // — avoids the deprecated `unescape` global which Hermes may handle differently
+  // from JavaScriptCore on non-ASCII sequences.
+  if (typeof btoa !== "undefined") return btoa(str);
+  // Pure-JS fallback for environments where btoa is absent
   const chars =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   let result = "";
@@ -69,6 +72,47 @@ function toBase64(str: string): string {
       chars[((a & 3) << 4) | (b >> 4)] +
       (i - 2 < str.length ? chars[((b & 15) << 2) | (c >> 6)] : "=") +
       (i - 1 < str.length ? chars[c & 63] : "=");
+  }
+  return result;
+}
+
+/**
+ * Decode a base64 string to an ASCII/Latin-1 string.
+ *
+ * WHY NOT atob():
+ * BLE-PLX delivers each GATT notification chunk as a separately base64-encoded
+ * value.  When the ESP32's NimBLE ATT_MTU is small (default 23 bytes → 20 bytes
+ * payload) a single CDK frame is fragmented across multiple notify events.
+ * Each chunk's base64 form is NOT a multiple of 4 characters, so the boundary
+ * between chunks lands in the middle of a base64 group.  Calling atob() on such
+ * a partial block is undefined behaviour: iOS (JavaScriptCore) silently zero-pads
+ * it while Hermes (Android) either throws or drops the last 1–2 bytes.  The
+ * mismatch produces garbled bytes that end up as garbage coordinate values.
+ *
+ * SOLUTION: accumulate raw base64 characters in a separate string buffer; only
+ * decode once a complete newline-terminated line has been detected in the decoded
+ * ASCII output.  Because we process the raw base64 accumulator in 4-char groups
+ * (the natural base64 unit), we never decode across a chunk boundary.
+ *
+ * This pure-JS implementation is identical on every platform.
+ */
+function fromBase64(b64: string): string {
+  const table =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  let result = "";
+  // Strip any whitespace / line-breaks that may appear in base64 strings
+  const s = b64.replace(/[^A-Za-z0-9+/=]/g, "");
+  for (let i = 0; i < s.length; i += 4) {
+    const a = table.indexOf(s[i]);
+    const b = table.indexOf(s[i + 1]);
+    const c = table.indexOf(s[i + 2] ?? "=");
+    const d = table.indexOf(s[i + 3] ?? "=");
+    if (a < 0 || b < 0) break; // malformed — stop
+    result += String.fromCharCode((a << 2) | (b >> 4));
+    if (c >= 0 && s[i + 2] !== "=")
+      result += String.fromCharCode(((b & 0xf) << 4) | (c >> 2));
+    if (d >= 0 && s[i + 3] !== "=")
+      result += String.fromCharCode(((c & 0x3) << 6) | d);
   }
   return result;
 }
@@ -229,10 +273,19 @@ class BleService implements ITransport {
         NUS_TX_CHAR,
         (error, characteristic) => {
           if (error || !characteristic?.value) return;
-          // BLE-PLX delivers base64—decode to string
-          const decoded = atob(characteristic.value);
-          for (const line of this.lineBuffer.append(decoded)) {
-            this.dispatchFrame(line);
+          try {
+            // Use our own pure-JS decoder instead of atob() so the byte
+            // interpretation is identical on iOS (JavaScriptCore) and Android
+            // (Hermes).  atob() is available on both but its handling of the
+            // padding that BLE-PLX adds can differ when the underlying BLE
+            // stack fragments a notify across multiple ATT PDUs.
+            const decoded = fromBase64(characteristic.value);
+            if (!decoded) return;
+            for (const line of this.lineBuffer.append(decoded)) {
+              this.dispatchFrame(line);
+            }
+          } catch (decodeErr) {
+            console.warn("[CDK/BLE] base64 decode error:", decodeErr);
           }
         },
       );
@@ -331,17 +384,6 @@ class BleService implements ITransport {
     const lng = opts.location ? opts.location.longitude.toFixed(6) : "none";
     const text = opts.text.replace(/,/g, ";").trim();
     const frame = `${FRAME_SOURCE}:MSG,URGENCY:${urgencyCode},LAT:${lat},LNG:${lng},TEXT:${text}`;
-    console.log(
-      "[BLE/sendMessage] location received:",
-      opts.location ?? "none",
-    );
-    console.log("[BLE/sendMessage] frame to send:", frame);
-    console.log(
-      "[BLE/sendMessage] mtuPayload:",
-      this.mtuPayload,
-      "encodedLen:",
-      Math.ceil((frame.length + 1) / 3) * 4,
-    );
     await this.sendRaw(frame);
   }
 
@@ -353,6 +395,7 @@ class BleService implements ITransport {
     targetId: string,
     text: string,
     location?: { latitude: number; longitude: number },
+    mid?: string,
   ): Promise<void> {
     if (targetId.length !== 8) {
       throw new Error("MTALK target ID must be exactly 8 characters.");
@@ -360,8 +403,9 @@ class BleService implements ITransport {
     const sanitised = text.replace(/,/g, ";").trim();
     const lat = location ? location.latitude.toFixed(6) : "none";
     const lng = location ? location.longitude.toFixed(6) : "none";
+    const midSuffix = mid ? `,MID:${mid}` : "";
     await this.sendRaw(
-      `CDK:MTALK,TARGET:${targetId},LAT:${lat},LNG:${lng},TEXT:${sanitised}`,
+      `CDK:MTALK,TARGET:${targetId},LAT:${lat},LNG:${lng},TEXT:${sanitised}${midSuffix}`,
     );
   }
 

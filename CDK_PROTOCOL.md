@@ -28,6 +28,15 @@ with an ESP32 device, covering both Android (USB serial) and iOS/Android
 12. [Transport Selection & Startup Flow](#12-transport-selection--startup-flow)
 13. [BLE Device Discovery](#13-ble-device-discovery)
 14. [Emergency Broadcast](#14-emergency-broadcast)
+15. [Direct Chat (MTALK)](#15-direct-chat-mtalk)
+    - [Wire Frames](#151-wire-frames)
+    - [Mobile App Architecture](#152-mobile-app-architecture)
+    - [Firmware Requirements](#153-firmware-requirements)
+16. [Location Tracking](#16-location-tracking)
+    - [User-Initiated Tracking](#161-user-initiated-tracking)
+    - [Location Ping Frame](#162-location-ping-frame)
+17. [Address Book](#17-address-book)
+18. [Offline Maps](#18-offline-maps)
 
 ---
 
@@ -154,6 +163,42 @@ CDK:PING\n
 ```
 
 No fields. The ESP32 responds with a `CDK:ID` frame immediately.
+
+#### Direct Chat Message (MTALK)
+
+Sent when the user types a message in the **Direct Chat** screen and taps send,
+or automatically when **location tracking** fires its 2-minute ping.
+
+```
+CDK:MTALK,TARGET:<duckId>,LAT:<latitude>,LNG:<longitude>,TEXT:<text>\n
+```
+
+| Field    | Type                          | Example      | Notes                                      |
+| -------- | ----------------------------- | ------------ | ------------------------------------------ |
+| `TARGET` | 8-char ASCII                  | `ZAIHAN12`   | `DUCK_NAME` of the destination MamaDuck    |
+| `LAT`    | float string (6 dp) or `none` | `3.140000`   | `none` when GPS is disabled or unavailable |
+| `LNG`    | float string (6 dp) or `none` | `101.686000` | `none` when GPS is disabled or unavailable |
+| `TEXT`   | ASCII string                  | `Hello!`     | Commas replaced with `;`; max ~200 chars   |
+
+For **location-only pings** (see §16) `TEXT` is the single emoji `📍`.
+
+Examples:
+
+```
+CDK:MTALK,TARGET:ZAIHAN12,LAT:3.140000,LNG:101.686000,TEXT:Are you ok?
+```
+
+```
+CDK:MTALK,TARGET:ZAIHAN12,LAT:none,LNG:none,TEXT:On my way
+```
+
+```
+CDK:MTALK,TARGET:ZAIHAN12,LAT:3.140000,LNG:101.686000,TEXT:📍
+```
+
+The frame is transmitted over LoRa using **topic 26** inside the ClusterDuck
+Protocol. The firmware calls `duck.sendData(26, payload, targetDuid)` which
+addresses it to the target duck's DUID derived from `TARGET`.
 
 ---
 
@@ -301,9 +346,9 @@ specific duck.
 CDK:BCAST,TEXT:<message-text>\n
 ```
 
-| Field  | Type         | Notes                                                                    |
-| ------ | ------------ | ------------------------------------------------------------------------ |
-| `TEXT` | ASCII string | The operator-composed emergency message; no embedded commas or newlines  |
+| Field  | Type         | Notes                                                                   |
+| ------ | ------------ | ----------------------------------------------------------------------- |
+| `TEXT` | ASCII string | The operator-composed emergency message; no embedded commas or newlines |
 
 Example:
 
@@ -319,6 +364,37 @@ The frame must not exceed 256 bytes including the trailing `\n`, limiting
 > operator-initiated emergency alert sent to **all** ducks at once. The app
 > renders them differently: `MSG` appears in the Incoming Messages list;
 > `BCAST` appears in the red Emergency Broadcast banner above it.
+
+---
+
+#### Incoming MTALK (Direct Chat Message) ← **displayed in Direct Chat tab**
+
+Sent by the ESP32 when it receives a LoRa topic 26 packet addressed to this
+device from another MamaDuck. The message appears as a speech bubble in the
+Direct Chat conversation.
+
+```
+CDK:MTALK,LAT:<latitude>,LNG:<longitude>,TEXT:<text>\n
+```
+
+| Field  | Type                          | Notes                                                    |
+| ------ | ----------------------------- | -------------------------------------------------------- |
+| `LAT`  | float string (6 dp) or `none` | Present when the sender attached GPS; omitted if `none`  |
+| `LNG`  | float string (6 dp) or `none` | Present when the sender attached GPS; omitted if `none`  |
+| `TEXT` | ASCII string                  | The chat message; `📍` for location-only pings (see §16) |
+
+Example:
+
+```
+CDK:MTALK,LAT:3.140000,LNG:101.686000,TEXT:I am at the checkpoint
+CDK:MTALK,LAT:none,LNG:none,TEXT:Copy that
+CDK:MTALK,LAT:3.140005,LNG:101.686010,TEXT:📍
+```
+
+> **Firmware note:** To forward GPS coordinates received in the incoming LoRa
+> packet the firmware must extract `LAT` and `LNG` from the MTALK payload and
+> include them in the CDK frame it sends to the phone. See §15.3 for the
+> required firmware changes.
 
 ---
 
@@ -1013,26 +1089,35 @@ void loop() {
 
 ## 6. Mobile App Code Map
 
-| File                                  | Purpose                                                                                                                                                                        |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `services/transport.ts`               | `ITransport` interface, all frame types (incl. `DeviceSosFrame`, `BcastFrame`), `parseIncomingLine()`, `LineBuffer`                                                            |
-| `services/serial.ts`                  | USB serial implementation of `ITransport` (Android); 2-s disconnect poll; auto-disconnect on send failure                                                                      |
-| `services/ble.ts`                     | BLE NUS implementation of `ITransport` (iOS + Android); `scanDevices()`; `connect(targetDeviceId?)`; PING after connect; name-based scan filter                                |
-| `services/index.ts`                   | Picks the right transport for the current platform; `defaultTransportMode`; exports `bleService` for direct access                                                             |
-| `contexts/serial-context.tsx`         | React context wrapping the active transport; provides `useSerial()` with `status`, `connect`, `disconnect`, `sendSOS`, `sendMessage`, `setTransportMode`, `connectToBleDevice` |
-| `components/serial-status-banner.tsx` | Colour-coded connection banner on all action screens; USB/BLE toggle; disconnect button; BLE "Connect" opens `BleScanSheet`                                                    |
-| `components/connect-prompt-sheet.tsx` | Android-only startup bottom sheet asking user to choose USB or BLE transport before first connection                                                                           |
-| `components/ble-device-picker.tsx`    | Live BLE scan list showing nearby ClusterDuck devices with RSSI signal strength; tap to connect                                                                                |
-| `hooks/use-location.ts`               | Requests GPS permission, watches position; returns `GpsState`                                                                                                                  |
-| `hooks/use-esp32-data.ts`             | Subscribes to `transport.onFrameReceived()`; reducer with `__RESET__` on disconnect; returns `{ battery, deviceId, incomingMessages, broadcastAlerts, deviceSosAlerts, … }`    |
-| `hooks/use-message-store.ts`          | Persistent message storage via `expo-file-system`; JSON file at `documentDirectory/cdk-messages.json`; max 200 messages                                                        |
-| `hooks/use-message-notifications.ts`  | Local push notifications via `expo-notifications`; `notifyNewMessage`, `notifyDeviceSOS`, and `notifyEmergencyBroadcast`                                                       |
-| `app/(tabs)/index.tsx`                | Home screen — SOS button, GPS card, Device Info card (ID + battery), Emergency Broadcast banner, incoming messages, device SOS history                                         |
-| `app/(tabs)/messages.tsx`             | Persistent message history list (sent + received)                                                                                                                              |
-| `app/(tabs)/settings.tsx`             | Emergency contacts CRUD + personal Medical ID editing                                                                                                                          |
-| `app/new-message.tsx`                 | Compose and send a text message with urgency level + optional GPS                                                                                                              |
-| `app/_layout.tsx`                     | Root stack; wraps app in `SerialProvider`; renders `ConnectPromptSheet`                                                                                                        |
-| `app.json`                            | Expo config; declares plugins for `react-native-ble-plx`, `expo-location`, `expo-notifications`, `expo-file-system`; USB + Bluetooth permissions                               |
+| File                                  | Purpose                                                                                                                                                                                                          |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `services/transport.ts`               | `ITransport` interface, all frame types (incl. `MTalkFrame`, `DeviceSosFrame`, `BcastFrame`), `parseIncomingLine()`, `LineBuffer`                                                                                |
+| `services/serial.ts`                  | USB serial implementation of `ITransport` (Android); 2-s disconnect poll; auto-disconnect on send failure; `sendMTalk()`                                                                                         |
+| `services/ble.ts`                     | BLE NUS implementation of `ITransport` (iOS + Android); `scanDevices()`; `connect(targetDeviceId?)`; PING after connect; name-based scan filter; `sendMTalk()`                                                   |
+| `services/index.ts`                   | Picks the right transport for the current platform; `defaultTransportMode`; exports `bleService` for direct access                                                                                               |
+| `contexts/serial-context.tsx`         | React context wrapping the active transport; provides `useSerial()` with `status`, `connect`, `disconnect`, `sendSOS`, `sendMessage`, `sendMTalk`, `setTransportMode`, `connectToBleDevice`                      |
+| `contexts/location-context.tsx`       | App-wide shared GPS watcher (single subscription); `useLocationCtx()` returns `GpsState`; avoids duplicate `watchPositionAsync` subscriptions                                                                    |
+| `contexts/chat-store-context.tsx`     | React context for `useChatStore`; provides `messages`, `targetPeer`, `addSent`, `addReceived`, `clearAll`                                                                                                        |
+| `contexts/address-book-context.tsx`   | React context for `useAddressBook`; provides `contacts`, `addContact`, `updateContact`, `removeContact`, `hasContact`                                                                                            |
+| `components/serial-status-banner.tsx` | Colour-coded connection banner on all action screens; USB/BLE toggle; disconnect button; BLE "Connect" opens `BleScanSheet`                                                                                      |
+| `components/connect-prompt-sheet.tsx` | Android-only startup bottom sheet asking user to choose USB or BLE transport before first connection                                                                                                             |
+| `components/ble-device-picker.tsx`    | Live BLE scan list showing nearby ClusterDuck devices with RSSI signal strength; tap to connect                                                                                                                  |
+| `hooks/use-location.ts`               | Requests GPS permission, watches position via `expo-location`; returns `GpsState`                                                                                                                                |
+| `hooks/use-esp32-data.ts`             | Subscribes to `transport.onFrameReceived()`; reducer with `__RESET__` on disconnect; handles `MTALK` → `addChatReceived`; returns `{ battery, deviceId, incomingMessages, broadcastAlerts, deviceSosAlerts, … }` |
+| `hooks/use-message-store.ts`          | Persistent message storage via `expo-file-system`; JSON file at `documentDirectory/cdk-messages.json`; max 200 messages                                                                                          |
+| `hooks/use-message-notifications.ts`  | Local push notifications via `expo-notifications`; `notifyNewMessage`, `notifyDeviceSOS`, and `notifyEmergencyBroadcast`                                                                                         |
+| `hooks/use-chat-store.ts`             | AsyncStorage-backed Direct Chat message list; persists `targetPeer`; `addSent(text, location?)`, `addReceived(text, coords?)`; max 200 messages                                                                  |
+| `hooks/use-address-book.ts`           | AsyncStorage-backed contact list; `addContact`, `updateContact`, `removeContact`, `hasContact`; sorted alphabetically by name                                                                                    |
+| `hooks/use-location-tracking.ts`      | Drives 2-minute GPS ping interval for mutual tracking; uses `useRef` to avoid stale closures; exports `LOCATION_PING_TEXT` sentinel (`📍`) and `formatCountdown()`                                               |
+| `hooks/use-offline-map.ts`            | Manages a single MapLibre offline pack `"cdk-offline-area"` (±15 km radius, zoom 3–14); `download(lat, lng)`, `deletePack()`, progress, size, `createdAt`                                                        |
+| `app/(tabs)/index.tsx`                | Home screen — SOS button, GPS card, Device Info card (ID + battery), Emergency Broadcast banner, incoming messages, device SOS history                                                                           |
+| `app/(tabs)/messages.tsx`             | Persistent message history list (sent + received)                                                                                                                                                                |
+| `app/(tabs)/chat.tsx`                 | Direct Chat screen — peer selector, address book modal, chat bubble list, GPS toggle, location tracking toggle, compose panel                                                                                    |
+| `app/(tabs)/map.tsx`                  | Full-screen OpenFreeMap/MapLibre map with offline pack download panel and live progress bar                                                                                                                      |
+| `app/(tabs)/settings.tsx`             | Emergency contacts CRUD + personal Medical ID editing                                                                                                                                                            |
+| `app/new-message.tsx`                 | Compose and send a text message with urgency level + optional GPS                                                                                                                                                |
+| `app/_layout.tsx`                     | Root stack; wraps app in `LocationProvider > AddressBookProvider > MessageStoreProvider > ChatStoreProvider > BroadcastStoreProvider > SerialProvider > ToastProvider`                                           |
+| `app.json`                            | Expo config; declares plugins for `react-native-ble-plx`, `expo-location`, `expo-notifications`, `expo-file-system`, `@maplibre/maplibre-react-native`; USB + Bluetooth + map permissions                        |
 
 ### Adding a new incoming frame type
 
@@ -1197,18 +1282,19 @@ push server is involved — all notifications are scheduled locally on the devic
 
 ### Notification Types
 
-| Event                                       | Title                      | Body                                               |
-| ------------------------------------------- | -------------------------- | -------------------------------------------------- |
-| Incoming LoRa message (`CDK:MSG`)           | 📨 New ClusterDuck Message | The message text                                   |
-| Device button SOS (`CDK:SOS,SRC:DEVICE`)   | 🆘 SOS from Device         | `<deviceId> triggered an SOS via hardware button.` |
-| Emergency broadcast (`CDK:BCAST`)           | 📢 EMERGENCY BROADCAST     | The broadcast message text                         |
+| Event                                    | Title                      | Body                                               |
+| ---------------------------------------- | -------------------------- | -------------------------------------------------- |
+| Incoming LoRa message (`CDK:MSG`)        | 📨 New ClusterDuck Message | The message text                                   |
+| Device button SOS (`CDK:SOS,SRC:DEVICE`) | 🆘 SOS from Device         | `<deviceId> triggered an SOS via hardware button.` |
+| Emergency broadcast (`CDK:BCAST`)        | 📢 EMERGENCY BROADCAST     | The broadcast message text                         |
 
 ### Implementation
 
 `hooks/use-message-notifications.ts` exposes:
 
 ```typescript
-const { notifyNewMessage, notifyDeviceSOS, notifyEmergencyBroadcast } = useMessageNotifications();
+const { notifyNewMessage, notifyDeviceSOS, notifyEmergencyBroadcast } =
+  useMessageNotifications();
 ```
 
 `notifyNewMessage(text)` is called from `useEsp32Data` when a `CDK:MSG` frame
@@ -1410,16 +1496,16 @@ MamaDuck firmware  →  handleDuckData(packet)  [case 24]
 
 ```json
 {
-  "target":  "BROADCAST",
-  "topic":   24,
+  "target": "BROADCAST",
+  "topic": 24,
   "message": "Evacuate sector 4 immediately"
 }
 ```
 
-| Field     | Value         | Notes                                                      |
-| --------- | ------------- | ---------------------------------------------------------- |
-| `target`  | `"BROADCAST"` | Instructs the hub to relay to all devices                  |
-| `topic`   | `24`          | Reserved LoRa topic for emergency broadcasts               |
+| Field     | Value         | Notes                                                       |
+| --------- | ------------- | ----------------------------------------------------------- |
+| `target`  | `"BROADCAST"` | Instructs the hub to relay to all devices                   |
+| `topic`   | `24`          | Reserved LoRa topic for emergency broadcasts                |
 | `message` | string        | Plain text, max 200 chars (validated by Laravel controller) |
 
 The broadcast is also persisted in `cluster_data` with
@@ -1468,6 +1554,7 @@ case 24:  // Emergency broadcast from operator
 ```
 
 `displayAnnouncement()` renders a two-part OLED layout:
+
 - **Header row** (centred): `[SIARAN KECEMASAN]`
 - **Body** (left-aligned, word-wrapped): message text
 - Stays on screen for **8 seconds** then powers off the display.
@@ -1482,8 +1569,8 @@ transport.
 // services/transport.ts
 export type BcastFrame = {
   type: "BCAST";
-  text: string;        // the emergency message text
-  receivedAt: number;  // Date.now() at parse time
+  text: string; // the emergency message text
+  receivedAt: number; // Date.now() at parse time
 };
 ```
 
@@ -1504,7 +1591,7 @@ case "BCAST":
 ```typescript
 interface Esp32Data {
   // ... existing fields ...
-  broadcastAlerts: BcastFrame[];  // newest-first; cleared on disconnect
+  broadcastAlerts: BcastFrame[]; // newest-first; cleared on disconnect
 }
 ```
 
@@ -1522,7 +1609,7 @@ async function notifyEmergencyBroadcast(text: string) {
       body: text,
       sound: true,
     },
-    trigger: null,  // immediate
+    trigger: null, // immediate
   });
 }
 ```
@@ -1543,14 +1630,429 @@ Visual design:
 
 ### Comparison: Broadcast vs Targeted Message
 
-| Property            | `CDK:MSG,TEXT:…`            | `CDK:BCAST,TEXT:…`                    |
-| ------------------- | ---------------------------- | ------------------------------------- |
-| Origin              | Duck user → their own duck   | Operator (`opendms`) → all ducks      |
-| MQTT topic          | 22                           | 24                                    |
-| LoRa target         | Specific duck ID             | `BROADCAST` (all devices)             |
-| App state field     | `incomingMessages[]`         | `broadcastAlerts[]`                   |
-| Push notification   | 📨 New ClusterDuck Message   | 📢 EMERGENCY BROADCAST                |
-| UI card             | Incoming Messages (orange)   | Emergency Broadcast (red)             |
-| Persisted to DB     | No                           | Yes (`duck_id = "BROADCAST"`)          |
-| Max text length     | 242 chars                    | 241 chars                             |
+| Property          | `CDK:MSG,TEXT:…`           | `CDK:BCAST,TEXT:…`               |
+| ----------------- | -------------------------- | -------------------------------- |
+| Origin            | Duck user → their own duck | Operator (`opendms`) → all ducks |
+| MQTT topic        | 22                         | 24                               |
+| LoRa target       | Specific duck ID           | `BROADCAST` (all devices)        |
+| App state field   | `incomingMessages[]`       | `broadcastAlerts[]`              |
+| Push notification | 📨 New ClusterDuck Message | 📢 EMERGENCY BROADCAST           |
+| UI card           | Incoming Messages (orange) | Emergency Broadcast (red)        |
+| Persisted to DB   | No                         | Yes (`duck_id = "BROADCAST"`)    |
+| Max text length   | 242 chars                  | 241 chars                        |
 
+---
+
+## 15. Direct Chat (MTALK)
+
+Direct Chat is a **person-to-person** LoRa message channel between two
+MamaDucks. Each user types a message on the Direct Chat tab; it travels over
+LoRa mesh (topic 26) to the target duck, which forwards it to the connected
+phone as a `CDK:MTALK` frame.
+
+### 15.1 Wire Frames
+
+#### App → ESP32 (outbound)
+
+See §2.2 for the full field reference. Quick summary:
+
+```
+CDK:MTALK,TARGET:<8-char>,LAT:<lat|none>,LNG:<lng|none>,TEXT:<text>\n
+```
+
+The app's `ITransport.sendMTalk()` implementation always includes `LAT` and
+`LNG` — set to the 6-decimal-place GPS fix when the user has GPS active, or
+the literal string `none` when GPS is off or unavailable. Commas inside `TEXT`
+are replaced with `;` before building the frame.
+
+#### ESP32 → App (inbound)
+
+See §2.3 for the full field reference. Quick summary:
+
+```
+CDK:MTALK,LAT:<lat|none>,LNG:<lng|none>,TEXT:<text>\n
+```
+
+The parser (`parseIncomingLine()`) extracts `LAT` and `LNG` into the
+`MTalkFrame` only when both are present and not `"none"`:
+
+```typescript
+case "MTALK": {
+  const lat = fields["LAT"];
+  const lng = fields["LNG"];
+  return {
+    type: "MTALK",
+    text: fields["TEXT"] ?? rest,
+    ...(lat && lat !== "none" ? { lat } : {}),
+    ...(lng && lng !== "none" ? { lng } : {}),
+    receivedAt: Date.now(),
+  };
+}
+```
+
+### 15.2 Mobile App Architecture
+
+```
+┌──────────────────────┐
+│  app/(tabs)/chat.tsx │  ← Direct Chat UI
+│  (peer selector,     │
+│   compose, bubbles,  │
+│   address book modal)│
+└────────┬─────────────┘
+         │ useSerial().sendMTalk()  (outbound)
+         │ useChatStoreCtx()        (message list)
+         │ useLocationCtx()         (GPS state)
+         │ useAddressBookCtx()      (contacts)
+         │ useLocationTracking()    (2-min pings)
+         ▼
+┌─────────────────────────────┐
+│  contexts/serial-context    │  sendMTalk(targetId, text, location?)
+│  contexts/chat-store-context│  addSent / addReceived
+│  contexts/address-book-ctx  │  contacts CRUD
+└────────┬────────────────────┘
+         │
+         ▼
+┌────────────────────────┐
+│  services/serial.ts    │  or services/ble.ts
+│  sendMTalk() →         │
+│  CDK:MTALK,TARGET:…    │
+└────────────────────────┘
+         │  LoRa topic 26
+         ▼
+┌────────────────────────┐
+│  Remote MamaDuck ESP32 │
+│  → CDK:MTALK,TEXT:…    │
+└────────────────────────┘
+         │
+         ▼
+┌──────────────────────────────┐
+│  hooks/use-esp32-data.ts     │  MTALK frame → addChatReceived()
+│  → chat-store-context        │
+│  → chat.tsx bubble list      │
+└──────────────────────────────┘
+```
+
+#### ChatMessage type
+
+```typescript
+// hooks/use-chat-store.ts
+export interface ChatMessage {
+  id: string; // timestamp + random suffix
+  direction: "sent" | "received";
+  text: string;
+  hasLocation: boolean; // true when LAT+LNG were attached
+  lat?: string; // e.g. "3.140000" (6 dp)
+  lng?: string; // e.g. "101.686000"
+  timestamp: number; // Unix ms
+}
+```
+
+Messages are persisted to `AsyncStorage` under the key `cdk-chat-messages`
+(max 200). The last-used `targetPeer` is persisted separately under
+`cdk-chat-peer` so the user doesn't have to retype it after restarting the app.
+
+#### Peer Selector UI
+
+The top row of the Direct Chat screen shows the current `targetPeer` (an
+exact 8-character `DUCK_NAME`). Tapping opens an inline text editor with a
+counter badge that turns green at 8/8. A contacts icon on the same row opens
+the **Address Book modal** (§17).
+
+#### GPS in chat bubbles
+
+When `msg.hasLocation` is `true` the bubble meta row shows:
+
+- **Sent bubbles:** an orange `📍` GPS pill labelled "GPS".
+- **Received bubbles:** an orange `📍` GPS pill with the sender's coordinates
+  formatted to 4 decimal places.
+
+For **location-ping** bubbles (`msg.text === "📍"`, see §16) a distinct card
+style is rendered instead of a text bubble: a `my-location` icon, "Location
+Update" label, and 5-decimal-place coordinates.
+
+### 15.3 Firmware Requirements
+
+#### Receiving an MTALK packet (topic 26)
+
+Add a case in `handleDuckData()` (the LoRa receive callback):
+
+```cpp
+void handleDuckData(std::vector<byte> data, int topic) {
+  String payload;
+  for (byte b : data) payload += (char)b;
+
+  switch (topic) {
+    case 26: {  // MTALK — direct peer-to-peer chat
+      // The payload sent by the remote app is:
+      //   TARGET:XXXXXXXX,LAT:x.xxxxxx,LNG:y.yyyyyy,TEXT:hello
+
+      String lat  = extractField(payload, "LAT");   // "3.140000" or "none"
+      String lng  = extractField(payload, "LNG");   // "101.686000" or "none"
+      String text = extractField(payload, "TEXT");
+
+      // Forward to the connected phone
+      String frame = "CDK:MTALK";
+      if (lat.length() && lat != "none") {
+        frame += ",LAT:" + lat + ",LNG:" + lng;
+      }
+      frame += ",TEXT:" + text;
+      broadcast(frame);  // USB + BLE
+      break;
+    }
+    // ... other topics ...
+  }
+}
+```
+
+#### Sending an MTALK packet
+
+Add an `MTALK` case inside `handleFrame()` (the USB/BLE receive handler:
+
+```cpp
+} else if (type == "MTALK") {
+  String target = extractField(body, "TARGET");  // 8-char DUCK_NAME
+  String lat    = extractField(body, "LAT");
+  String lng    = extractField(body, "LNG");
+  String text   = extractField(body, "TEXT");
+
+  // Build payload for LoRa topic 26
+  String lrPayload = "TARGET:" + target;
+  if (lat.length() && lat != "none") {
+    lrPayload += ",LAT:" + lat + ",LNG:" + lng;
+  }
+  lrPayload += ",TEXT:" + text;
+
+  // sendData(topic, payload, targetDuid) — targetDuid derived from TARGET
+  int err = duck.sendData(26, lrPayload, target);
+  if (!err) broadcast("CDK:ACK,ID:MTALK");
+}
+```
+
+> **Important:** The `DUCK_NAME` used as `targetId` must be **exactly 8 ASCII
+> characters** (the app enforces this in the UI and in `ITransport.sendMTalk()`).
+> The MamaDuck firmware derives the DUID from this name internally.
+
+---
+
+## 16. Location Tracking
+
+When a user enables **location tracking** in the Direct Chat screen, the app
+automatically sends the sender's GPS coordinates to the `targetPeer` every
+**2 minutes** as long as tracking is active. This allows two people in the field
+to monitor each other's position without manually sending messages.
+
+### 16.1 User-Initiated Tracking
+
+Tracking is **opt-in per session** — it is never enabled automatically. The
+user activates it via the **Track pill** in the Direct Chat compose options row.
+
+**Activation conditions:**
+
+- A valid 8-character `targetPeer` must be set.
+- The device must be connected.
+- GPS must be available (`gps.status === "ready"`).
+
+On activation:
+
+1. A location ping is sent **immediately** (no waiting for the first interval).
+2. Pings repeat every **120 000 ms (2 minutes)**.
+3. A cyan **Tracking Active** banner appears above the chat history showing a
+   live countdown to the next ping (`Next in 1m 30s`).
+
+Tracking stops when:
+
+- The user taps the Track pill again, or the ■ stop button in the banner.
+- The device disconnects (auto-stop with a warning toast).
+- The screen is unmounted.
+
+### 16.2 Location Ping Frame
+
+A location ping is an MTALK message where `TEXT` is the sentinel string `📍`
+(the Unicode pin emoji). The full wire frame is:
+
+```
+CDK:MTALK,TARGET:<duckId>,LAT:<lat>,LNG:<lng>,TEXT:📍\n
+```
+
+On the receiving side, the phone parses the `CDK:MTALK` frame as normal. When
+both the text equals `📍` **and** `hasLocation` is true, the Direct Chat UI
+renders a compact **Location Update card** instead of a text bubble:
+
+```
+┌──────────────────────────────────────┐
+│  🎯  Location Update                 │
+│      3.14001, 101.68601              │
+│                              10:42   │
+└──────────────────────────────────────┘
+```
+
+Sent cards are orange-tinted; received cards are blue-tinted.
+
+#### Implementation (`hooks/use-location-tracking.ts`)
+
+```typescript
+export const TRACKING_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes
+export const LOCATION_PING_TEXT = "📍"; // sentinel
+
+// All mutable inputs are held in refs so the interval callback
+// always captures the latest GPS fix without being re-created.
+useEffect(() => {
+  if (!active) {
+    /* clear intervals */ return;
+  }
+
+  sendPing(); // immediate first ping
+  setSecondsLeft(TRACKING_INTERVAL_MS / 1000);
+
+  pingIntervalRef.current = setInterval(() => {
+    sendPing();
+    setSecondsLeft(TRACKING_INTERVAL_MS / 1000);
+  }, TRACKING_INTERVAL_MS);
+
+  countdownIntervalRef.current = setInterval(() => {
+    setSecondsLeft((s) => Math.max(0, s - 1));
+  }, 1000);
+
+  return () => {
+    /* clear intervals */
+  };
+}, [active, sendPing]);
+```
+
+---
+
+## 17. Address Book
+
+The Address Book stores frequently used duck IDs with human-readable names so
+users don't have to type or remember 8-character identifiers.
+
+### Storage
+
+Contacts are stored in `AsyncStorage` under the key `cdk-address-book` as a
+JSON array of `Contact` objects:
+
+```typescript
+// hooks/use-address-book.ts
+export interface Contact {
+  id: string; // random unique id (not the duck ID)
+  name: string; // display name, e.g. "Alice"
+  duckId: string; // exactly 8 chars, always uppercase, e.g. "ZAIHAN12"
+  addedAt: number; // Unix ms
+}
+```
+
+Contacts are kept sorted alphabetically by `name`. Duplicate `duckId` values
+are rejected at the `addContact()` call site with a descriptive error.
+
+### Address Book Modal (in Direct Chat)
+
+Opened via the **contacts icon** (📒) on the peer selector row. Features:
+
+| Action                   | Description                                                                             |
+| ------------------------ | --------------------------------------------------------------------------------------- |
+| **New Contact**          | Inline form: name input + duck ID input (8-char enforced)                               |
+| **Save `PEER_ID`**       | Quick-save shortcut for the currently selected peer (only shown when not already saved) |
+| **Chat** (orange button) | Sets `targetPeer` to this contact's `duckId` and closes the modal                       |
+| **Delete** (red button)  | Removes the contact from the list                                                       |
+
+The **Chat** button is the primary way users switch conversation partners.
+Selecting a contact automatically updates the `targetPeer` in `useChatStoreCtx`
+and persists it to `AsyncStorage`.
+
+### Context Provider
+
+`AddressBookProvider` is mounted near the top of the provider tree in
+`app/_layout.tsx` (inside `LocationProvider`, outside all other providers)
+so contacts are available app-wide.
+
+```typescript
+// Usage in any component
+const { contacts, addContact, removeContact, hasContact } = useAddressBookCtx();
+```
+
+---
+
+## 18. Offline Maps
+
+The **Map** tab shows a full-screen interactive map and allows the user to
+download map tiles for offline use.
+
+### Library & Tile Source
+
+| Library         | `@maplibre/maplibre-react-native` v10.4.2                        |
+| --------------- | ---------------------------------------------------------------- |
+| Tile source     | **OpenFreeMap** — free, no API key required, OpenStreetMap-based |
+| Style URL       | `https://tiles.openfreemap.org/styles/liberty`                   |
+| Offline manager | `MapLibreGL.offlineManager`                                      |
+
+### Offline Pack
+
+A single named pack `"cdk-offline-area"` is maintained (created or replaced):
+
+| Parameter  | Value                                                    |
+| ---------- | -------------------------------------------------------- |
+| `name`     | `"cdk-offline-area"`                                     |
+| `styleURL` | `https://tiles.openfreemap.org/styles/liberty`           |
+| `bounds`   | ±15 km radius around the given lat/lng (NE + SW corners) |
+| `minZoom`  | `3`                                                      |
+| `maxZoom`  | `14`                                                     |
+
+Approximate tile count at this zoom range for a 30 km × 30 km area:
+~500–2 000 tiles depending on tile server's available zoom levels.
+
+### Download Flow
+
+1. User opens the **Map** tab — current GPS position is used as the pack
+   centre when available.
+2. User taps **Download Area**.
+3. `hooks/use-offline-map.ts` calls `OfflineManager.createPack()` with the
+   options above.
+4. `OfflineManager` fires `progressListener` callbacks as tiles are fetched.
+   The hook exposes:
+   - `status`: `"idle"` | `"downloading"` | `"complete"` | `"error"`
+   - `percentage`: 0–100
+   - `sizeBytes` / `sizeLabel` (human-readable, e.g. `"12.4 MB"`)
+   - `createdAt`: timestamp of last successful download
+5. A progress bar and status text are shown in the bottom panel of the map
+   screen.
+
+### Deleting a Pack
+
+The user can tap **Delete Offline Data** (shown only when a pack exists).
+This calls `OfflineManager.deletePack("cdk-offline-area")` and resets state.
+
+### Implementation (`hooks/use-offline-map.ts`)
+
+```typescript
+const PACK_NAME = "cdk-offline-area";
+const OFFLINE_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
+const DELTA_DEG = 0.135; // ≈ 15 km each direction
+
+export function useOfflineMap() {
+  // ...
+  async function download(lat: number, lng: number) {
+    await MapLibreGL.offlineManager.createPack(
+      {
+        name: PACK_NAME,
+        styleURL: OFFLINE_STYLE_URL,
+        bounds: [
+          [lng + DELTA_DEG, lat + DELTA_DEG], // NE
+          [lng - DELTA_DEG, lat - DELTA_DEG],
+        ], // SW
+        minZoom: 3,
+        maxZoom: 14,
+      },
+      progressListener,
+      errorListener,
+    );
+  }
+  // ...
+}
+```
+
+### Permissions
+
+No additional runtime permissions are required beyond `ACCESS_FINE_LOCATION`
+(already declared for GPS). The tile download uses the standard network stack.
+Internet access is only needed during download; the downloaded pack is served
+entirely from on-device storage.

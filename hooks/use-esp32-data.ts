@@ -26,6 +26,7 @@ import type {
     ErrFrame,
     IdFrame,
     IncomingFrame,
+    MackFrame,
     MsgFrame,
     MTalkFrame,
     StatusFrame,
@@ -114,6 +115,10 @@ function reduce(state: ReducerState, action: Action): ReducerState {
       // Persisted via ChatStore — only update lastFrame in the reducer
       return { ...state, lastFrame: frame };
     }
+    case "MACK": {
+      // Delivery receipt — handled in side-effect, not stored in reducer state
+      return { ...state, lastFrame: frame };
+    }
     case "SOS": {
       const sos = frame as DeviceSosFrame;
       return {
@@ -131,10 +136,18 @@ export function useEsp32Data(): Esp32Data {
   const [state, dispatch] = useReducer(reduce, initial);
   const { addReceived } = useMessageStoreCtx();
   const { broadcasts, addBroadcast } = useBroadcastStoreCtx();
-  const { addReceived: addChatReceived } = useChatStoreCtx();
+  const {
+    addReceived: addChatReceived,
+    incrementUnread,
+    markDelivered,
+  } = useChatStoreCtx();
   const { transportMode, status } = useSerial();
-  const { notifyNewMessage, notifyDeviceSOS, notifyEmergencyBroadcast } =
-    useMessageNotifications();
+  const {
+    notifyNewMessage,
+    notifyDeviceSOS,
+    notifyEmergencyBroadcast,
+    notifyDirectMessage,
+  } = useMessageNotifications();
 
   // Reset all ESP32 data when the transport disconnects
   useEffect(() => {
@@ -159,9 +172,19 @@ export function useEsp32Data(): Esp32Data {
       }
       if (frame.type === "MTALK") {
         const talk = frame as MTalkFrame;
+        // Use the sender duck ID if firmware provides it (FROM= field).
+        // Fall back to "INCOMING" (8 chars) so no message is ever silently lost.
+        const peerId = talk.from ?? "INCOMING";
         const coords =
           talk.lat && talk.lng ? { lat: talk.lat, lng: talk.lng } : undefined;
-        addChatReceived(talk.text, coords);
+        addChatReceived(peerId, talk.text, coords);
+        incrementUnread(peerId);
+        notifyDirectMessage(peerId, talk.text);
+      }
+      if (frame.type === "MACK") {
+        // Delivery receipt — mark the corresponding sent message as delivered
+        const mack = frame as MackFrame;
+        if (mack.id) markDelivered(mack.id);
       }
       if (
         frame.type === "SOS" &&
@@ -174,9 +197,12 @@ export function useEsp32Data(): Esp32Data {
     addReceived,
     addBroadcast,
     addChatReceived,
+    incrementUnread,
+    markDelivered,
     notifyNewMessage,
     notifyEmergencyBroadcast,
     notifyDeviceSOS,
+    notifyDirectMessage,
     transportMode,
   ]);
 

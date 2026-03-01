@@ -69,12 +69,28 @@ export type DeviceSosFrame = {
  */
 export type MTalkFrame = {
   type: "MTALK";
+  /**
+   * Sender duck ID forwarded by the firmware via a FROM= field.
+   * Undefined when the firmware does not yet include it.
+   */
+  from?: string;
   text: string;
   /** GPS latitude string, e.g. "3.140000", or "none" / undefined when not sent. */
   lat?: string;
   /** GPS longitude string, e.g. "101.686000", or "none" / undefined when not sent. */
   lng?: string;
+  /** Message ID echoed back in the MACK receipt (present when firmware v2+ sent this). */
+  mid?: string;
   receivedAt: number;
+};
+/** Delivery receipt — the receiver's firmware sends this back to the sender after
+ * successfully receiving an MTALK that carried a MID field. */
+export type MackFrame = {
+  type: "MACK";
+  /** The MID from the original MTALK that is being acknowledged. */
+  id: string;
+  /** Duck ID of the peer who received and acknowledged the message. */
+  from: string;
 };
 export type UnknownFrame = { type: string; raw: string };
 
@@ -88,6 +104,7 @@ export type IncomingFrame =
   | BcastFrame
   | DeviceSosFrame
   | MTalkFrame
+  | MackFrame
   | UnknownFrame;
 
 export type FrameCallback = (frame: IncomingFrame) => void;
@@ -152,14 +169,30 @@ export function parseIncomingLine(line: string): IncomingFrame | null {
     case "MTALK": {
       const lat = fields["LAT"];
       const lng = fields["LNG"];
+      // Accept a coordinate only when it is present, not the literal "none",
+      // and actually parses as a finite number.  Any other value (empty string,
+      // garbage bytes, scientific-notation overflow, etc.) is silently dropped
+      // so the UI never displays NaN or wrong data.
+      const validLat =
+        lat && lat !== "none" && isFinite(parseFloat(lat)) ? lat : undefined;
+      const validLng =
+        lng && lng !== "none" && isFinite(parseFloat(lng)) ? lng : undefined;
       return {
         type: "MTALK",
+        ...(fields["FROM"] ? { from: fields["FROM"] } : {}),
         text: fields["TEXT"] ?? rest,
-        ...(lat && lat !== "none" ? { lat } : {}),
-        ...(lng && lng !== "none" ? { lng } : {}),
+        ...(fields["MID"] ? { mid: fields["MID"] } : {}),
+        ...(validLat !== undefined ? { lat: validLat } : {}),
+        ...(validLng !== undefined ? { lng: validLng } : {}),
         receivedAt: Date.now(),
       };
     }
+    case "MACK":
+      return {
+        type: "MACK",
+        id: fields["ID"] ?? "",
+        from: fields["FROM"] ?? "",
+      };
   }
 
   return { type, raw: trimmed };
@@ -218,10 +251,13 @@ export interface ITransport {
    * Send a direct MamaDuck-to-MamaDuck chat message (MTALK, LoRa topic 26).
    * targetId must be exactly 8 characters — the DUCK_NAME of the remote MamaDuck.
    * Optionally attach GPS coordinates so the recipient knows the sender's position.
+   * Optionally provide a `mid` (message ID) so the receiver firmware sends back a
+   * CDK:MACK delivery receipt.
    */
   sendMTalk(
     targetId: string,
     text: string,
     location?: { latitude: number; longitude: number },
+    mid?: string,
   ): Promise<void>;
 }
