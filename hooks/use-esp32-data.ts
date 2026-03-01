@@ -172,7 +172,7 @@ export function useEsp32Data(): Esp32Data {
       }
       if (frame.type === "MTALK") {
         const talk = frame as MTalkFrame;
-        // Use the sender DUID if firmware provides it (DUID= field).
+        // Use the sender duck ID from the FROM= field set by MamaDuck firmware.
         // Fall back to "INCOMING" so no message is ever silently lost.
         const peerId = talk.from ?? "INCOMING";
         const coords =
