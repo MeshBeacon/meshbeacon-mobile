@@ -140,13 +140,28 @@ export default function ChatThreadScreen() {
   const [message, setMessage] = useState("");
   const [attachGps, setAttachGps] = useState(true);
   const [trackingActive, setTrackingActive] = useState(false);
+  const trackingActiveRef = useRef(false);
+  useEffect(() => {
+    trackingActiveRef.current = trackingActive;
+  }, [trackingActive]);
   const [sending, setSending] = useState(false);
 
   // ── Tracking consent state machine ────────────────────────────────────────
-  // "idle"       – no request sent yet
-  // "requesting" – we sent [TRACK_REQ], waiting for the peer to respond
-  // "granted"    – peer sent [TRACK_OK]; peer is now sending us their location
-  // "denied"     – peer sent [TRACK_NO]; peer refused to share their location
+  //
+  // Two independent roles, tracked separately:
+  //
+  // consentState — OUR role as the REQUESTER (A wants to see B's location)
+  //   "idle"       – no request sent
+  //   "requesting" – we sent [TRACK_REQ], waiting for B to respond
+  //   "granted"    – B agreed; B is now actively sending us their location
+  //   "denied"     – B declined our request
+  //
+  // trackingActive — OUR role as the SHARER (B asked us to share our location)
+  //   false – not sharing
+  //   true  – we accepted B's request and are sending periodic location pings
+  //
+  // Both states can be true simultaneously if both sides have requested each
+  // other, but by default only one role is active at a time.
   const [consentState, setConsentState] = useState<
     "idle" | "requesting" | "granted" | "denied"
   >("idle");
@@ -166,23 +181,31 @@ export default function ChatThreadScreen() {
     for (const m of newMsgs) {
       if (m.direction !== "received") continue;
       if (m.text === TRACK_REQ_TEXT) {
-        // Peer wants us to share our location with them — show consent prompt
+        // Peer wants to see our location — show consent banner
         setHasPendingReq(true);
       } else if (m.text === TRACK_OK_TEXT) {
-        // Peer agreed to share their location — record consent, wait for their pings
+        // Peer agreed to our tracking request — they will now send us pings
         setConsentState("granted");
         showToast(
-          `${contact?.name ?? peerId} accepted location tracking.`,
+          `${contact?.name ?? peerId} is now sharing their location.`,
           "success",
         );
       } else if (m.text === TRACK_NO_TEXT) {
-        // Peer declined — stop any active tracking
-        setConsentState("denied");
-        setTrackingActive(false);
-        showToast(
-          `${contact?.name ?? peerId} declined location tracking.`,
-          "warning",
-        );
+        if (trackingActiveRef.current) {
+          // Peer revoked our sharing session — stop sending pings
+          setTrackingActive(false);
+          showToast(
+            `${contact?.name ?? peerId} stopped the location sharing.`,
+            "warning",
+          );
+        } else {
+          // Peer declined our tracking request
+          setConsentState("denied");
+          showToast(
+            `${contact?.name ?? peerId} declined location sharing.`,
+            "warning",
+          );
+        }
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -230,10 +253,27 @@ export default function ChatThreadScreen() {
     }
   };
 
-  // Stop tracking and reset consent so a fresh request is needed next time
-  const handleStopTracking = () => {
+  // Stop sharing our location and notify peer so they know pings have stopped
+  const handleStopSharing = async () => {
     setTrackingActive(false);
+    try {
+      await sendMTalk(peerId, TRACK_NO_TEXT);
+      addSent(TRACK_NO_TEXT);
+    } catch {
+      // Best-effort — local state is already cleared
+    }
+  };
+
+  // Cancel/revoke our tracking request when we are the RECEIVER
+  // (i.e. we requested B to share, B agreed, now we want to stop receiving)
+  const handleRevokeTracking = async () => {
     setConsentState("idle");
+    try {
+      await sendMTalk(peerId, TRACK_NO_TEXT);
+      addSent(TRACK_NO_TEXT);
+    } catch {
+      // Best-effort
+    }
   };
 
   const { secondsLeft, currentIntervalMs } = useLocationTracking({
@@ -254,12 +294,11 @@ export default function ChatThreadScreen() {
     return () => requestAccuracy(null);
   }, [trackingActive, requestAccuracy]);
 
-  // Auto-stop tracking on disconnect
+  // Auto-stop sharing on disconnect
   useEffect(() => {
     if ((status === "disconnected" || status === "error") && trackingActive) {
       setTrackingActive(false);
-      setConsentState("idle");
-      showToast("Location tracking stopped: device disconnected.", "warning");
+      showToast("Location sharing stopped: device disconnected.", "warning");
     }
   }, [status, trackingActive, showToast]);
 
@@ -391,7 +430,7 @@ export default function ChatThreadScreen() {
                     : ""}
                 </Text>
                 <Pressable
-                  onPress={handleStopTracking}
+                  onPress={handleStopSharing}
                   style={styles.trackingStop}
                 >
                   <MaterialIcons name="stop" size={14} color="#fff" />
@@ -740,21 +779,24 @@ export default function ChatThreadScreen() {
                   </Text>
                 </Pressable>
 
-                {/* Location-tracking toggle — consent-gated */}
+                {/* Location-tracking toggle — two independent roles */}
                 <Pressable
                   style={[
                     styles.trackPill,
                     trackingActive && styles.trackPillActive,
                     consentState === "requesting" && styles.trackPillRequesting,
+                    consentState === "granted" && styles.trackPillGranted,
                     consentState === "denied" && styles.trackPillDenied,
                   ]}
                   onPress={() => {
                     if (trackingActive) {
-                      handleStopTracking();
+                      // I am the sharer — stop sending pings
+                      handleStopSharing();
                     } else if (consentState === "granted") {
-                      setTrackingActive(true);
+                      // I am the tracker — revoke (ask peer to stop sending)
+                      handleRevokeTracking();
                     } else {
-                      // idle or denied — (re-)request consent
+                      // idle or denied — (re-)request peer to share their location
                       setConsentState("idle");
                       handleRequestTrack();
                     }
@@ -764,40 +806,49 @@ export default function ChatThreadScreen() {
                     name={
                       trackingActive
                         ? "my-location"
-                        : consentState === "requesting"
-                          ? "pending"
-                          : consentState === "denied"
-                            ? "block"
-                            : "location-searching"
+                        : consentState === "granted"
+                          ? "location-on"
+                          : consentState === "requesting"
+                            ? "pending"
+                            : consentState === "denied"
+                              ? "block"
+                              : "location-searching"
                     }
                     size={14}
                     color={
                       trackingActive
                         ? "#0ea5e9"
-                        : consentState === "requesting"
-                          ? "#92400e"
-                          : consentState === "denied"
-                            ? "#991b1b"
-                            : "#8a7560"
+                        : consentState === "granted"
+                          ? "#16a34a"
+                          : consentState === "requesting"
+                            ? "#92400e"
+                            : consentState === "denied"
+                              ? "#991b1b"
+                              : "#8a7560"
                     }
                   />
                   <Text
                     style={[
                       styles.trackPillText,
                       trackingActive && styles.trackPillTextActive,
+                      consentState === "granted" && styles.trackPillTextGranted,
                       consentState === "requesting" &&
                         styles.trackPillTextRequesting,
                       consentState === "denied" && styles.trackPillTextDenied,
                     ]}
                   >
                     {trackingActive
-                      ? `Sharing · ${formatCountdown(secondsLeft)}`
-                      : consentState === "requesting"
-                        ? "Awaiting consent…"
-                        : consentState === "denied"
-                          ? "Declined · Retry"
-                          : consentState === "granted"
-                            ? "Share Back"
+                      ? `Sharing · ${formatCountdown(secondsLeft)}${
+                          currentIntervalMs > TRACKING_INTERVAL_MS
+                            ? " · Stationary"
+                            : ""
+                        }`
+                      : consentState === "granted"
+                        ? `Tracking ${contact?.name ?? peerId} · Stop`
+                        : consentState === "requesting"
+                          ? "Awaiting consent…"
+                          : consentState === "denied"
+                            ? "Declined · Retry"
                             : "Request Track"}
                   </Text>
                 </Pressable>
@@ -1280,10 +1331,12 @@ const styles = StyleSheet.create({
     backgroundColor: "#fef3c70d",
   },
   trackPillDenied: { borderColor: "#991b1b33", backgroundColor: "#fee2e20d" },
+  trackPillGranted: { borderColor: "#16a34a33", backgroundColor: "#dcfce70d" },
   trackPillText: { fontSize: 12, color: "#8a7560", fontWeight: "600" },
   trackPillTextActive: { color: "#0ea5e9" },
   trackPillTextRequesting: { color: "#92400e" },
   trackPillTextDenied: { color: "#991b1b" },
+  trackPillTextGranted: { color: "#16a34a" },
   inputRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   input: {
     flex: 1,
