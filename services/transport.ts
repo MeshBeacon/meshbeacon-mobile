@@ -70,8 +70,8 @@ export type DeviceSosFrame = {
 export type MTalkFrame = {
   type: "MTALK";
   /**
-   * Sender duck ID forwarded by the firmware via a FROM= field.
-   * Undefined when the firmware does not yet include it.
+   * Sender duck ID (DUID) forwarded by the firmware via the `DUID=` field.
+   * Undefined when the firmware does not include it.
    */
   from?: string;
   text: string;
@@ -179,7 +179,7 @@ export function parseIncomingLine(line: string): IncomingFrame | null {
         lng && lng !== "none" && isFinite(parseFloat(lng)) ? lng : undefined;
       return {
         type: "MTALK",
-        ...(fields["FROM"] ? { from: fields["FROM"] } : {}),
+        ...(fields["DUID"] ? { from: fields["DUID"] } : {}),
         text: fields["TEXT"] ?? rest,
         ...(fields["MID"] ? { mid: fields["MID"] } : {}),
         ...(validLat !== undefined ? { lat: validLat } : {}),
@@ -191,7 +191,7 @@ export function parseIncomingLine(line: string): IncomingFrame | null {
       return {
         type: "MACK",
         id: fields["ID"] ?? "",
-        from: fields["FROM"] ?? "",
+        from: fields["DUID"] ?? "",
       };
   }
 

@@ -13,8 +13,18 @@ export type GpsState =
 /**
  * Requests foreground location permission on mount and keeps the latest
  * coordinates updated via a watch subscription.
+ *
+ * @param enabled  Set to false to skip GPS entirely (no permission request,
+ *                 no watcher). Use this to keep GPS off when not needed.
+ * @param accuracy Expo Location accuracy level. Defaults to Balanced.
+ *                 Pass Accuracy.Low when only a coarse fix is needed (saves
+ *                 battery). Pass Accuracy.Balanced or higher when precision
+ *                 matters (e.g. active location tracking).
  */
-export function useLocation(enabled = true) {
+export function useLocation(
+  enabled = true,
+  accuracy: Location.Accuracy = Location.Accuracy.Balanced,
+) {
   const [state, setState] = useState<GpsState>({ status: "idle" });
 
   useEffect(() => {
@@ -58,15 +68,22 @@ export function useLocation(enabled = true) {
         // Device has no cached position yet — watcher will deliver one shortly.
       }
 
-      // ── Stage 1: fast coarse fix via WiFi/cell (Balanced) ─────────────────
-      // On iOS, Accuracy.High waits for satellite GPS which can take 30–60 s
-      // indoors. Accuracy.Balanced uses WiFi + cell towers and typically
-      // delivers a fix within 1–2 s, which is good enough to unblock sends.
-      // We also omit distanceInterval so iOS delivers every available update
-      // without a movement-threshold gate.
+      // ── Stage 1: watcher at the requested accuracy level ───────────────────
+      // distanceInterval is tuned to the accuracy level so the OS doesn't fire
+      // callbacks more often than the precision can meaningfully resolve:
+      //   Low      →  100 m  (cell towers, very low power)
+      //   Balanced →   10 m  (WiFi + cell, medium power)
+      //   High+    →    5 m  (GPS, higher power)
+      const distanceInterval =
+        accuracy <= Location.Accuracy.Low
+          ? 100
+          : accuracy === Location.Accuracy.Balanced
+            ? 10
+            : 5;
+
       try {
         watcher = await Location.watchPositionAsync(
-          { accuracy: Location.Accuracy.Balanced, distanceInterval: 10 },
+          { accuracy, distanceInterval },
           (loc) => {
             console.log(
               "[GPS] watcher callback:",
@@ -87,32 +104,16 @@ export function useLocation(enabled = true) {
         setState({ status: "error", message: String(watchErr) });
         return;
       }
-
-      // ── Stage 2: one-shot high-accuracy upgrade ────────────────────────────
-      // Runs in the background after the watcher is live. Failure is silently
-      // ignored — the Balanced watcher fix is already usable.
-      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High })
-        .then((fix) => {
-          setState((prev) => {
-            if (prev.status !== "ready") return prev;
-            return {
-              status: "ready",
-              coords: {
-                latitude: fix.coords.latitude,
-                longitude: fix.coords.longitude,
-              },
-            };
-          });
-        })
-        .catch(() => {
-          /* high-accuracy shot failed — keep watcher's coarse fix */
-        });
+      // Note: no unconditional high-accuracy one-shot here — that would wake
+      // the GPS satellite radio on every mount even when only a coarse fix is
+      // needed. Callers that need a precise one-time fix should call
+      // Location.getCurrentPositionAsync() themselves on demand.
     })();
 
     return () => {
       watcher?.remove();
     };
-  }, [enabled]);
+  }, [enabled, accuracy]);
 
   return state;
 }

@@ -26,7 +26,12 @@ function haversineM(a: GpsCoords, b: GpsCoords): number {
   return R * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s));
 }
 
-export const TRACKING_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes
+export const TRACKING_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes base
+/**
+ * Maximum ping interval under exponential backoff (10 minutes).
+ * Reached after ~2-3 consecutive stationary skips.
+ */
+export const MAX_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 /**
  * Minimum distance (metres) the sender must have moved since the last
  * successful ping before a new one is transmitted.  Keeps the radio and GPS
@@ -43,8 +48,8 @@ export const LOCATION_PING_TEXT = "[LOC]";
 /**
  * Tracking consent sentinels — sent as regular MTALK TEXT payloads.
  *
- * TRACK_REQ_TEXT  A → B: "I would like to send you periodic location pings."
- * TRACK_OK_TEXT   B → A: "I consent. You may start tracking."
+ * TRACK_REQ_TEXT  A → B: "I want to track your location. Do you consent?"
+ * TRACK_OK_TEXT   B → A: "I consent." (B then starts sending periodic location pings to A)
  * TRACK_NO_TEXT   B → A: "I do not consent. Do not track me."
  *
  * The firmware forwards these transparently because they are normal TEXT
@@ -79,8 +84,10 @@ export function useLocationTracking({
   sendMTalk,
   addSent,
   onError,
-}: Options): { secondsLeft: number } {
+}: Options): { secondsLeft: number; currentIntervalMs: number } {
   const [secondsLeft, setSecondsLeft] = useState(0);
+  const [currentIntervalMs, setCurrentIntervalMs] =
+    useState(TRACKING_INTERVAL_MS);
 
   // ── Mutable-value refs so the interval never captures stale closures ──────
   const gpsRef = useRef(gps);
@@ -114,22 +121,24 @@ export function useLocationTracking({
   }, [active]);
 
   // ── Core ping function ────────────────────────────────────────────────────
-  const sendPing = useCallback(async () => {
+  // Returns true when a ping was actually transmitted, false when skipped
+  // (no GPS fix, disconnected, or below movement threshold).
+  const sendPing = useCallback(async (): Promise<boolean> => {
     const peer = targetPeerRef.current;
     const currentGps = gpsRef.current;
     const serStatus = serialStatusRef.current;
 
     if (!peer || peer.length !== 8) {
       onErrorRef.current("Set the duck ID of your chat partner first.");
-      return;
+      return false;
     }
     if (currentGps.status !== "ready") {
       onErrorRef.current("No GPS fix yet — retrying at next interval.");
-      return;
+      return false;
     }
     if (serStatus === "disconnected" || serStatus === "error") {
       onErrorRef.current("Device not connected — retrying at next interval.");
-      return;
+      return false;
     }
 
     const location = currentGps.coords;
@@ -141,7 +150,7 @@ export function useLocationTracking({
       const dist = haversineM(lastSentCoordsRef.current, location);
       if (dist < MIN_DISTANCE_M) {
         // Silently skip — not an error, just stationary
-        return;
+        return false;
       }
     }
 
@@ -149,48 +158,80 @@ export function useLocationTracking({
       await sendMTalkRef.current(peer, LOCATION_PING_TEXT, location);
       addSentRef.current(LOCATION_PING_TEXT, location);
       lastSentCoordsRef.current = location;
+      return true;
     } catch (err) {
       onErrorRef.current((err as Error).message);
+      return false;
     }
   }, []);
 
-  // ── Interval management ───────────────────────────────────────────────────
-  const pingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // ── Interval management with exponential backoff ──────────────────────────
+  // When stationary (sendPing returns false), the next interval is doubled up
+  // to MAX_INTERVAL_MS. On movement (sendPing returns true), it resets to the
+  // base TRACKING_INTERVAL_MS. This dramatically cuts LoRa radio activity and
+  // GPS queries when the user hasn't moved.
+  const pingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
     null,
   );
   const nextPingAtRef = useRef<number>(0);
   const lastSentCoordsRef = useRef<GpsCoords | null>(null);
+  const currentIntervalMsRef = useRef<number>(TRACKING_INTERVAL_MS);
 
   useEffect(() => {
     if (!active) {
       // Clear everything when tracking is turned off
-      if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
+      if (pingTimeoutRef.current) clearTimeout(pingTimeoutRef.current);
       if (countdownIntervalRef.current)
         clearInterval(countdownIntervalRef.current);
-      pingIntervalRef.current = null;
+      pingTimeoutRef.current = null;
       countdownIntervalRef.current = null;
       lastSentCoordsRef.current = null;
+      currentIntervalMsRef.current = TRACKING_INTERVAL_MS;
       setSecondsLeft(0);
+      setCurrentIntervalMs(TRACKING_INTERVAL_MS);
       return;
     }
 
-    // Send the first ping immediately on activation
-    sendPing();
-    const startAt = Date.now();
-    nextPingAtRef.current = startAt + TRACKING_INTERVAL_MS;
-    setSecondsLeft(TRACKING_INTERVAL_MS / 1000);
+    // Schedule the next ping after `delayMs`, then chain via setTimeout so the
+    // interval can be adjusted dynamically based on movement.
+    const schedulePing = (delayMs: number) => {
+      nextPingAtRef.current = Date.now() + delayMs;
+      setSecondsLeft(Math.round(delayMs / 1000));
 
-    // Schedule recurring pings
-    pingIntervalRef.current = setInterval(() => {
-      sendPing();
-      nextPingAtRef.current = Date.now() + TRACKING_INTERVAL_MS;
-      setSecondsLeft(TRACKING_INTERVAL_MS / 1000);
-    }, TRACKING_INTERVAL_MS);
+      pingTimeoutRef.current = setTimeout(async () => {
+        const moved = await sendPing();
 
-    // Tick the countdown every 10 s instead of every 1 s — 10× less work.
-    // secondsLeft is recomputed from the scheduled next-ping timestamp so
-    // it stays accurate despite the coarser tick rate.
+        if (!activeRef.current) return; // tracking was stopped mid-flight
+
+        if (moved) {
+          // User moved — reset backoff to base interval
+          currentIntervalMsRef.current = TRACKING_INTERVAL_MS;
+        } else {
+          // Stationary — double the interval (capped at MAX_INTERVAL_MS)
+          currentIntervalMsRef.current = Math.min(
+            currentIntervalMsRef.current * 2,
+            MAX_INTERVAL_MS,
+          );
+        }
+
+        setCurrentIntervalMs(currentIntervalMsRef.current);
+        schedulePing(currentIntervalMsRef.current);
+      }, delayMs);
+    };
+
+    // Send the first ping immediately on activation, then start the chain
+    const boot = async () => {
+      const moved = await sendPing();
+      if (!activeRef.current) return;
+      // If the first ping was skipped (no fix yet), start at base interval
+      if (!moved) currentIntervalMsRef.current = TRACKING_INTERVAL_MS;
+      setCurrentIntervalMs(currentIntervalMsRef.current);
+      schedulePing(currentIntervalMsRef.current);
+    };
+    boot();
+
+    // Tick the countdown every 10 s — 10× less JS work than 1-second ticks.
     countdownIntervalRef.current = setInterval(() => {
       const remaining = Math.max(
         0,
@@ -200,13 +241,13 @@ export function useLocationTracking({
     }, 10_000);
 
     return () => {
-      if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
+      if (pingTimeoutRef.current) clearTimeout(pingTimeoutRef.current);
       if (countdownIntervalRef.current)
         clearInterval(countdownIntervalRef.current);
     };
   }, [active, sendPing]);
 
-  return { secondsLeft };
+  return { secondsLeft, currentIntervalMs };
 }
 
 /** Format a number of seconds as "1m 30s" or "45s". */

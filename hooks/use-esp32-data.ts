@@ -172,8 +172,8 @@ export function useEsp32Data(): Esp32Data {
       }
       if (frame.type === "MTALK") {
         const talk = frame as MTalkFrame;
-        // Use the sender duck ID if firmware provides it (FROM= field).
-        // Fall back to "INCOMING" (8 chars) so no message is ever silently lost.
+        // Use the sender DUID if firmware provides it (DUID= field).
+        // Fall back to "INCOMING" so no message is ever silently lost.
         const peerId = talk.from ?? "INCOMING";
         const coords =
           talk.lat && talk.lng ? { lat: talk.lat, lng: talk.lng } : undefined;

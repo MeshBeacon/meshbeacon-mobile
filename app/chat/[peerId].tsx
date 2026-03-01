@@ -26,12 +26,18 @@ import {
     TextInput,
     View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import {
+    SafeAreaView,
+    useSafeAreaInsets,
+} from "react-native-safe-area-context";
 
 import { SerialStatusBanner } from "@/components/serial-status-banner";
 import { useAddressBookCtx } from "@/contexts/address-book-context";
 import { useChatStoreCtx } from "@/contexts/chat-store-context";
-import { useLocationCtx } from "@/contexts/location-context";
+import {
+    useLocationAccuracy,
+    useLocationCtx,
+} from "@/contexts/location-context";
 import { useSerial } from "@/contexts/serial-context";
 import { useToast } from "@/contexts/toast-context";
 import {
@@ -40,9 +46,11 @@ import {
     TRACK_NO_TEXT,
     TRACK_OK_TEXT,
     TRACK_REQ_TEXT,
+    TRACKING_INTERVAL_MS,
     useLocationTracking,
 } from "@/hooks/use-location-tracking";
 import { OFFLINE_STYLE_URL } from "@/hooks/use-offline-map";
+import * as Location from "expo-location";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -71,9 +79,11 @@ export default function ChatThreadScreen() {
   const router = useRouter();
 
   const { status, sendMTalk } = useSerial();
+  const insets = useSafeAreaInsets();
   const { getMessages, addSent: storAddSent, markRead } = useChatStoreCtx();
   const { showToast } = useToast();
   const gps = useLocationCtx();
+  const requestAccuracy = useLocationAccuracy();
   const { contacts, addContact, removeContact, hasContact } =
     useAddressBookCtx();
 
@@ -135,8 +145,8 @@ export default function ChatThreadScreen() {
   // ── Tracking consent state machine ────────────────────────────────────────
   // "idle"       – no request sent yet
   // "requesting" – we sent [TRACK_REQ], waiting for the peer to respond
-  // "granted"    – peer sent [TRACK_OK]; we may send location pings
-  // "denied"     – peer sent [TRACK_NO]; tracking is not allowed
+  // "granted"    – peer sent [TRACK_OK]; peer is now sending us their location
+  // "denied"     – peer sent [TRACK_NO]; peer refused to share their location
   const [consentState, setConsentState] = useState<
     "idle" | "requesting" | "granted" | "denied"
   >("idle");
@@ -156,12 +166,11 @@ export default function ChatThreadScreen() {
     for (const m of newMsgs) {
       if (m.direction !== "received") continue;
       if (m.text === TRACK_REQ_TEXT) {
-        // Peer wants to track us — show consent prompt
+        // Peer wants us to share our location with them — show consent prompt
         setHasPendingReq(true);
       } else if (m.text === TRACK_OK_TEXT) {
-        // Peer accepted our tracking request — enable tracking
+        // Peer agreed to share their location — record consent, wait for their pings
         setConsentState("granted");
-        setTrackingActive(true);
         showToast(
           `${contact?.name ?? peerId} accepted location tracking.`,
           "success",
@@ -194,12 +203,13 @@ export default function ChatThreadScreen() {
     }
   };
 
-  // Accept an incoming [TRACK_REQ] from peer
+  // Accept an incoming [TRACK_REQ] from peer — we start sending our location to them
   const handleConsentAccept = async () => {
     setHasPendingReq(false);
     try {
       await sendMTalk(peerId, TRACK_OK_TEXT);
       addSent(TRACK_OK_TEXT);
+      setTrackingActive(true);
       showToast(
         `You accepted location tracking from ${contact?.name ?? peerId}.`,
         "success",
@@ -226,7 +236,7 @@ export default function ChatThreadScreen() {
     setConsentState("idle");
   };
 
-  const { secondsLeft } = useLocationTracking({
+  const { secondsLeft, currentIntervalMs } = useLocationTracking({
     active: trackingActive,
     targetPeer: peerId,
     gps,
@@ -235,6 +245,14 @@ export default function ChatThreadScreen() {
     addSent,
     onError: (msg) => showToast(msg, "warning"),
   });
+
+  // Upgrade GPS to Balanced accuracy while tracking is active so the
+  // movement-threshold check is precise enough to detect 30 m movement.
+  // Releases back to Low (cell-tower) automatically when tracking stops.
+  useEffect(() => {
+    requestAccuracy(trackingActive ? Location.Accuracy.Balanced : null);
+    return () => requestAccuracy(null);
+  }, [trackingActive, requestAccuracy]);
 
   // Auto-stop tracking on disconnect
   useEffect(() => {
@@ -344,7 +362,7 @@ export default function ChatThreadScreen() {
                   color="#92400e"
                 />
                 <Text style={styles.consentBannerText} numberOfLines={2}>
-                  {contact?.name ?? peerId} wants to send you location updates
+                  {contact?.name ?? peerId} wants to track your location
                 </Text>
                 <Pressable
                   style={styles.consentDeclineBtn}
@@ -366,8 +384,11 @@ export default function ChatThreadScreen() {
               <View style={styles.trackingBanner}>
                 <MaterialIcons name="my-location" size={14} color="#fff" />
                 <Text style={styles.trackingBannerText}>
-                  Tracking {contact?.name ?? peerId} · Next in{" "}
+                  Sharing with {contact?.name ?? peerId} · Next in{" "}
                   {formatCountdown(secondsLeft)}
+                  {currentIntervalMs > TRACKING_INTERVAL_MS
+                    ? " · Stationary"
+                    : ""}
                 </Text>
                 <Pressable
                   onPress={handleStopTracking}
@@ -417,8 +438,8 @@ export default function ChatThreadScreen() {
                         : "cancel";
                   const label = isReq
                     ? isSent
-                      ? "You requested to share your location"
-                      : `${contact?.name ?? peerId} requested to share their location`
+                      ? "You requested to track their location"
+                      : `${contact?.name ?? peerId} wants to track your location`
                     : isOk
                       ? isSent
                         ? "You accepted location sharing"
@@ -770,13 +791,13 @@ export default function ChatThreadScreen() {
                     ]}
                   >
                     {trackingActive
-                      ? `Tracking · ${formatCountdown(secondsLeft)}`
+                      ? `Sharing · ${formatCountdown(secondsLeft)}`
                       : consentState === "requesting"
                         ? "Awaiting consent…"
                         : consentState === "denied"
                           ? "Declined · Retry"
                           : consentState === "granted"
-                            ? "Track"
+                            ? "Share Back"
                             : "Request Track"}
                   </Text>
                 </Pressable>
@@ -824,7 +845,12 @@ export default function ChatThreadScreen() {
         animationType="slide"
         onRequestClose={() => setAbOpen(false)}
       >
-        <SafeAreaView style={styles.abModal} edges={["top", "bottom"]}>
+        <View
+          style={[
+            styles.abModal,
+            { paddingTop: insets.top, paddingBottom: insets.bottom },
+          ]}
+        >
           <View style={styles.abHeader}>
             <MaterialIcons name="contacts" size={20} color="#f27f0d" />
             <Text style={styles.abTitle}>Address Book</Text>
@@ -972,7 +998,7 @@ export default function ChatThreadScreen() {
               ))
             )}
           </ScrollView>
-        </SafeAreaView>
+        </View>
       </Modal>
     </>
   );
