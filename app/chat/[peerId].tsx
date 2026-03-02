@@ -522,41 +522,73 @@ export default function ChatThreadScreen() {
                   const coord: [number, number] | null = hasCoords
                     ? [parseFloat(msg.lng!), parseFloat(msg.lat!)]
                     : null;
+
+                  // Sent pings: show a compact confirmation pill — the map is
+                  // only meaningful to the recipient who needs to see the location.
+                  if (isSent) {
+                    return (
+                      <View
+                        key={msg.id}
+                        style={[styles.bubbleRow, styles.bubbleRowSent]}
+                      >
+                        <View style={styles.bubbleCol}>
+                          <View style={styles.locSentPill}>
+                            <MaterialIcons
+                              name="my-location"
+                              size={13}
+                              color="#f27f0d"
+                            />
+                            <Text style={styles.locSentPillText}>
+                              Location sent
+                            </Text>
+                            {hasCoords && (
+                              <Text style={styles.locSentPillCoords}>
+                                {`${fmtCoord(msg.lat, 4)}, ${fmtCoord(msg.lng, 4)}`}
+                              </Text>
+                            )}
+                          </View>
+                          <View style={[styles.bubbleMeta, styles.bubbleMetaSent]}>
+                            <Text style={styles.timeText}>
+                              {formatTime(msg.timestamp)}
+                            </Text>
+                            {msg.deliveryStatus && (
+                              <MaterialIcons
+                                name={
+                                  msg.deliveryStatus === "delivered"
+                                    ? "done-all"
+                                    : "done"
+                                }
+                                size={13}
+                                color={
+                                  msg.deliveryStatus === "delivered"
+                                    ? "#0ea5e9"
+                                    : "#a09080"
+                                }
+                              />
+                            )}
+                          </View>
+                        </View>
+                      </View>
+                    );
+                  }
+
+                  // Received pings: show the full embedded map for the requestor.
                   return (
                     <View
                       key={msg.id}
-                      style={[
-                        styles.bubbleRow,
-                        isSent
-                          ? styles.bubbleRowSent
-                          : styles.bubbleRowReceived,
-                      ]}
+                      style={[styles.bubbleRow, styles.bubbleRowReceived]}
                     >
-                      {!isSent && (
-                        <View style={styles.avatar}>
-                          <MaterialIcons
-                            name="cell-tower"
-                            size={14}
-                            color="#fff"
-                          />
-                        </View>
-                      )}
+                      <View style={styles.avatar}>
+                        <MaterialIcons
+                          name="cell-tower"
+                          size={14}
+                          color="#fff"
+                        />
+                      </View>
                       <View
-                        style={[
-                          styles.bubbleCol,
-                          isSent
-                            ? styles.bubbleColSent
-                            : styles.bubbleColReceived,
-                        ]}
+                        style={[styles.bubbleCol, styles.bubbleColReceived]}
                       >
-                        <View
-                          style={[
-                            styles.mapCard,
-                            isSent
-                              ? styles.mapCardSent
-                              : styles.mapCardReceived,
-                          ]}
-                        >
+                        <View style={[styles.mapCard, styles.mapCardReceived]}>
                           {coord ? (
                             <View style={styles.mapThumb} pointerEvents="none">
                               <MapView
@@ -584,9 +616,7 @@ export default function ChatThreadScreen() {
                                   <View
                                     style={[
                                       styles.mapPinDot,
-                                      isSent
-                                        ? styles.mapPinDotSent
-                                        : styles.mapPinDotReceived,
+                                      styles.mapPinDotReceived,
                                     ]}
                                   />
                                 </PointAnnotation>
@@ -608,13 +638,10 @@ export default function ChatThreadScreen() {
                             <MaterialIcons
                               name="my-location"
                               size={13}
-                              color={isSent ? "#f27f0d" : "#0ea5e9"}
+                              color="#0ea5e9"
                             />
                             <Text
-                              style={[
-                                styles.mapCardLabel,
-                                { color: isSent ? "#f27f0d" : "#0ea5e9" },
-                              ]}
+                              style={[styles.mapCardLabel, { color: "#0ea5e9" }]}
                             >
                               Location Update
                             </Text>
@@ -626,31 +653,11 @@ export default function ChatThreadScreen() {
                           </View>
                         </View>
                         <View
-                          style={[
-                            styles.bubbleMeta,
-                            isSent
-                              ? styles.bubbleMetaSent
-                              : styles.bubbleMetaReceived,
-                          ]}
+                          style={[styles.bubbleMeta, styles.bubbleMetaReceived]}
                         >
                           <Text style={styles.timeText}>
                             {formatTime(msg.timestamp)}
                           </Text>
-                          {isSent && msg.deliveryStatus && (
-                            <MaterialIcons
-                              name={
-                                msg.deliveryStatus === "delivered"
-                                  ? "done-all"
-                                  : "done"
-                              }
-                              size={13}
-                              color={
-                                msg.deliveryStatus === "delivered"
-                                  ? "#0ea5e9"
-                                  : "#a09080"
-                              }
-                            />
-                          )}
                         </View>
                       </View>
                     </View>
@@ -1270,6 +1277,29 @@ const styles = StyleSheet.create({
   },
   mapPinDotSent: { backgroundColor: "#f27f0d" },
   mapPinDotReceived: { backgroundColor: "#0ea5e9" },
+  locSentPill: {
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    flexWrap: "wrap" as const,
+    gap: 4,
+    backgroundColor: "#fff5e6",
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderWidth: 1,
+    borderColor: "#f27f0d33",
+  },
+  locSentPillText: {
+    fontSize: 13,
+    fontWeight: "600" as const,
+    color: "#f27f0d",
+  },
+  locSentPillCoords: {
+    fontSize: 10,
+    color: "#8a7560",
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    width: "100%" as const,
+  },
   locationPill: {
     flexDirection: "row",
     alignItems: "center",
