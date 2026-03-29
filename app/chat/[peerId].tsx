@@ -42,13 +42,11 @@ import {
 import { useSerial } from "@/contexts/serial-context";
 import { useToast } from "@/contexts/toast-context";
 import {
-  formatCountdown,
   LOC_REQ_TEXT,
   LOCATION_PING_TEXT,
   TRACK_NO_TEXT,
   TRACK_OK_TEXT,
   TRACK_REQ_TEXT,
-  TRACKING_INTERVAL_MS,
   useLocationTracking,
 } from "@/hooks/use-location-tracking";
 import { OFFLINE_STYLE_URL, useOfflineMap } from "@/hooks/use-offline-map";
@@ -302,7 +300,7 @@ export default function ChatThreadScreen() {
     }
   };
 
-  const { secondsLeft, currentIntervalMs, sendPingNow } = useLocationTracking({
+  const { sendPingNow } = useLocationTracking({
     active: trackingActive,
     targetPeer: peerId,
     gps,
@@ -467,11 +465,7 @@ export default function ChatThreadScreen() {
               <View style={styles.trackingBanner}>
                 <MaterialIcons name="my-location" size={14} color="#fff" />
                 <Text style={styles.trackingBannerText}>
-                  Sharing with {contact?.name ?? peerId} · Next in{" "}
-                  {formatCountdown(secondsLeft)}
-                  {currentIntervalMs > TRACKING_INTERVAL_MS
-                    ? " · Stationary"
-                    : ""}
+                  Sharing location with {contact?.name ?? peerId}
                 </Text>
                 <Pressable
                   onPress={handleStopSharing}
@@ -648,12 +642,15 @@ export default function ChatThreadScreen() {
                     );
                   }
 
-                  // Received pings: show the full embedded map for the requester.
-                  // If no offline map is downloaded yet, show a download prompt.
-                  const mapReady = offlineMap.status === "complete";
-                  const mapChecking =
-                    offlineMap.status === "checking" ||
-                    offlineMap.status === "downloading";
+                  // Received pings: always render the MapView when coords are
+                  // present — MapLibre renders whatever tiles it has (online or
+                  // offline). Never block on offlineMap.status so the spinner
+                  // never gets stuck (OfflineManager can hang on iOS).
+                  // A non-blocking overlay hints the user to download tiles if
+                  // no offline pack is confirmed yet.
+                  const noOfflinePack =
+                    offlineMap.status === "idle" ||
+                    offlineMap.status === "error";
                   return (
                     <View
                       key={msg.id}
@@ -681,14 +678,7 @@ export default function ChatThreadScreen() {
                                 No coordinates
                               </Text>
                             </View>
-                          ) : mapChecking ? (
-                            <View style={styles.mapThumbFallback}>
-                              <ActivityIndicator size="small" color="#0ea5e9" />
-                              <Text style={styles.mapThumbFallbackText}>
-                                Checking map data…
-                              </Text>
-                            </View>
-                          ) : mapReady ? (
+                          ) : (
                             <Pressable
                               style={styles.mapThumb}
                               onPress={() => {
@@ -734,6 +724,22 @@ export default function ChatThreadScreen() {
                                   </PointAnnotation>
                                 </MapView>
                               </View>
+                              {/* Hint overlay when no offline pack is available */}
+                              {noOfflinePack && (
+                                <Pressable
+                                  style={styles.mapNoOfflineOverlay}
+                                  onPress={() => router.push("/(tabs)/map")}
+                                >
+                                  <MaterialIcons
+                                    name="download-for-offline"
+                                    size={13}
+                                    color="#fff"
+                                  />
+                                  <Text style={styles.mapNoOfflineOverlayText}>
+                                    No offline map · tap to download
+                                  </Text>
+                                </Pressable>
+                              )}
                               <View style={styles.mapExpandOverlay}>
                                 <MaterialIcons
                                   name="open-in-full"
@@ -742,30 +748,6 @@ export default function ChatThreadScreen() {
                                 />
                                 <Text style={styles.mapExpandOverlayText}>
                                   Tap to expand
-                                </Text>
-                              </View>
-                            </Pressable>
-                          ) : (
-                            // No offline map downloaded — prompt the user
-                            <Pressable
-                              style={styles.mapDownloadPrompt}
-                              onPress={() => router.push("/(tabs)/map")}
-                            >
-                              <MaterialIcons
-                                name="download-for-offline"
-                                size={32}
-                                color="#0ea5e9"
-                              />
-                              <Text style={styles.mapDownloadPromptTitle}>
-                                Offline map required
-                              </Text>
-                              <Text style={styles.mapDownloadPromptBody}>
-                                Location received ·{" "}
-                                {`${fmtCoord(msg.lat, 4)}, ${fmtCoord(msg.lng, 4)}`}
-                              </Text>
-                              <View style={styles.mapDownloadPromptBtn}>
-                                <Text style={styles.mapDownloadPromptBtnText}>
-                                  Go to Map tab to download
                                 </Text>
                               </View>
                             </Pressable>
@@ -896,7 +878,13 @@ export default function ChatThreadScreen() {
 
             {/* ── Compose panel ── */}
             <View style={styles.compose}>
-              <View style={styles.composeOptions}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={styles.composeOptionsScroll}
+                contentContainerStyle={styles.composeOptions}
+                keyboardShouldPersistTaps="handled"
+              >
                 {/* GPS pill */}
                 <Pressable
                   style={[styles.gpsPill, attachGps && styles.gpsPillActive]}
@@ -984,11 +972,7 @@ export default function ChatThreadScreen() {
                     ]}
                   >
                     {trackingActive
-                      ? `Sharing · ${formatCountdown(secondsLeft)}${
-                          currentIntervalMs > TRACKING_INTERVAL_MS
-                            ? " · Stationary"
-                            : ""
-                        }`
+                      ? "Sharing location"
                       : consentState === "granted"
                         ? `Tracking ${contact?.name ?? peerId} · Stop`
                         : consentState === "requesting"
@@ -1019,7 +1003,7 @@ export default function ChatThreadScreen() {
                     </Text>
                   </Pressable>
                 )}
-              </View>
+              </ScrollView>
 
               <View style={styles.inputRow}>
                 <TextInput
@@ -1626,7 +1610,13 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff",
     gap: 8,
   },
-  composeOptions: { flexDirection: "row", alignItems: "center" },
+  composeOptions: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 2,
+    gap: 0,
+  },
+  composeOptionsScroll: { flexGrow: 0 },
   gpsPill: {
     flexDirection: "row",
     alignItems: "center",
@@ -1639,7 +1629,12 @@ const styles = StyleSheet.create({
     backgroundColor: "#f8f7f5",
   },
   gpsPillActive: { borderColor: "#f27f0d33", backgroundColor: "#f27f0d0d" },
-  gpsPillText: { fontSize: 12, color: "#8a7560", fontWeight: "600" },
+  gpsPillText: {
+    fontSize: 12,
+    color: "#8a7560",
+    fontWeight: "600",
+    maxWidth: 130,
+  },
   gpsPillTextActive: { color: "#f27f0d" },
   trackPill: {
     flexDirection: "row",
@@ -1660,7 +1655,12 @@ const styles = StyleSheet.create({
   },
   trackPillDenied: { borderColor: "#991b1b33", backgroundColor: "#fee2e20d" },
   trackPillGranted: { borderColor: "#16a34a33", backgroundColor: "#dcfce70d" },
-  trackPillText: { fontSize: 12, color: "#8a7560", fontWeight: "600" },
+  trackPillText: {
+    fontSize: 12,
+    color: "#8a7560",
+    fontWeight: "600",
+    maxWidth: 160,
+  },
   trackPillTextActive: { color: "#0ea5e9" },
   trackPillTextRequesting: { color: "#92400e" },
   trackPillTextDenied: { color: "#991b1b" },
@@ -1953,6 +1953,25 @@ const styles = StyleSheet.create({
   },
   mapExpandOverlayText: {
     fontSize: 11,
+    color: "#fff",
+    fontWeight: "600" as const,
+  },
+  mapNoOfflineOverlay: {
+    position: "absolute" as const,
+    top: 8,
+    left: 8,
+    right: 8,
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    gap: 5,
+    backgroundColor: "rgba(0,0,0,0.52)",
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 8,
+  },
+  mapNoOfflineOverlayText: {
+    flex: 1,
+    fontSize: 10,
     color: "#fff",
     fontWeight: "600" as const,
   },
