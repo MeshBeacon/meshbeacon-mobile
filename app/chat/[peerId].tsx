@@ -1,55 +1,56 @@
 import { MaterialIcons } from "@expo/vector-icons";
 import {
-    Camera,
-    MapView,
-    PointAnnotation,
+  Camera,
+  MapView,
+  PointAnnotation,
+  type CameraRef,
 } from "@maplibre/maplibre-react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import {
-    useCallback,
-    useEffect,
-    useMemo,
-    useRef,
-    useState,
-    type ComponentProps,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
 } from "react";
 import {
-    ActivityIndicator,
-    Keyboard,
-    KeyboardAvoidingView,
-    Modal,
-    Platform,
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
+  ActivityIndicator,
+  Keyboard,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from "react-native";
 import {
-    SafeAreaView,
-    useSafeAreaInsets,
+  SafeAreaView,
+  useSafeAreaInsets,
 } from "react-native-safe-area-context";
 
 import { SerialStatusBanner } from "@/components/serial-status-banner";
 import { useAddressBookCtx } from "@/contexts/address-book-context";
 import { useChatStoreCtx } from "@/contexts/chat-store-context";
 import {
-    useLocationAccuracy,
-    useLocationCtx,
+  useLocationAccuracy,
+  useLocationCtx,
 } from "@/contexts/location-context";
 import { useSerial } from "@/contexts/serial-context";
 import { useToast } from "@/contexts/toast-context";
 import {
-    formatCountdown,
-    LOCATION_PING_TEXT,
-    TRACK_NO_TEXT,
-    TRACK_OK_TEXT,
-    TRACK_REQ_TEXT,
-    TRACKING_INTERVAL_MS,
-    useLocationTracking,
+  formatCountdown,
+  LOCATION_PING_TEXT,
+  TRACK_NO_TEXT,
+  TRACK_OK_TEXT,
+  TRACK_REQ_TEXT,
+  TRACKING_INTERVAL_MS,
+  useLocationTracking,
 } from "@/hooks/use-location-tracking";
-import { OFFLINE_STYLE_URL } from "@/hooks/use-offline-map";
+import { OFFLINE_STYLE_URL, useOfflineMap } from "@/hooks/use-offline-map";
 import * as Location from "expo-location";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -79,6 +80,7 @@ export default function ChatThreadScreen() {
   const router = useRouter();
 
   const { status, sendMTalk } = useSerial();
+  const offlineMap = useOfflineMap();
   const insets = useSafeAreaInsets();
   const { getMessages, addSent: storAddSent, markRead } = useChatStoreCtx();
   const { showToast } = useToast();
@@ -117,6 +119,14 @@ export default function ChatThreadScreen() {
   const [addingContact, setAddingContact] = useState(false);
   const [contactNameDraft, setContactNameDraft] = useState("");
   const [contactIdDraft, setContactIdDraft] = useState("");
+
+  // Expanded map modal
+  const [expandedCoord, setExpandedCoord] = useState<[number, number] | null>(
+    null,
+  );
+  const [expandedLabel, setExpandedLabel] = useState("");
+  const [expandedZoom, setExpandedZoom] = useState(13);
+  const expandedCamRef = useRef<CameraRef>(null);
 
   const openAddContact = (prefillId = "") => {
     setContactNameDraft("");
@@ -169,6 +179,13 @@ export default function ChatThreadScreen() {
   // True when the peer has sent us a [TRACK_REQ] and we haven't replied yet
   const [hasPendingReq, setHasPendingReq] = useState(false);
 
+  // True while A has sent [LOC_REQ] and is waiting for B's next [LOC] ping
+  const [requestingNow, setRequestingNow] = useState(false);
+
+  // Ref so the message-scan effect can always call the latest sendPingNow
+  // without adding it as a dependency (it comes from the tracking hook below).
+  const sendPingNowRef = useRef<() => Promise<void>>(async () => {});
+
   // Watch incoming messages for consent signals and react
   const prevMsgCountRef = useRef(0);
   useEffect(() => {
@@ -206,6 +223,14 @@ export default function ChatThreadScreen() {
             "warning",
           );
         }
+      } else if (m.text === LOC_REQ_TEXT) {
+        // Peer is requesting an immediate location update from us — fire a forced ping
+        if (trackingActiveRef.current) {
+          sendPingNowRef.current();
+        }
+      } else if (m.text === LOCATION_PING_TEXT && m.hasLocation) {
+        // We received a location ping — clear the "requesting now" spinner
+        setRequestingNow(false);
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -276,7 +301,7 @@ export default function ChatThreadScreen() {
     }
   };
 
-  const { secondsLeft, currentIntervalMs } = useLocationTracking({
+  const { secondsLeft, currentIntervalMs, sendPingNow } = useLocationTracking({
     active: trackingActive,
     targetPeer: peerId,
     gps,
@@ -284,6 +309,25 @@ export default function ChatThreadScreen() {
     sendMTalk,
     onError: (msg) => showToast(msg, "warning"),
   });
+
+  // Keep the ref in sync so the message-scan effect can call it safely
+  useEffect(() => {
+    sendPingNowRef.current = sendPingNow;
+  }, [sendPingNow]);
+
+  // Request an immediate location update from the peer (A → B)
+  const handleRequestNow = async () => {
+    if (status === "disconnected" || status === "error") {
+      showToast("Connect to the device first.", "error");
+      return;
+    }
+    try {
+      await sendMTalk(peerId, LOC_REQ_TEXT);
+      setRequestingNow(true);
+    } catch (err) {
+      showToast((err as Error).message, "error");
+    }
+  };
 
   // Upgrade GPS to Balanced accuracy while tracking is active so the
   // movement-threshold check is precise enough to detect 30 m movement.
@@ -464,8 +508,38 @@ export default function ChatThreadScreen() {
                 if (
                   msg.text === TRACK_REQ_TEXT ||
                   msg.text === TRACK_OK_TEXT ||
-                  msg.text === TRACK_NO_TEXT
+                  msg.text === TRACK_NO_TEXT ||
+                  msg.text === LOC_REQ_TEXT
                 ) {
+                  // LOC_REQ: compact inline system event card
+                  if (msg.text === LOC_REQ_TEXT) {
+                    return (
+                      <View key={msg.id} style={styles.systemRow}>
+                        <View
+                          style={[styles.consentCard, styles.consentCardLocReq]}
+                        >
+                          <MaterialIcons
+                            name="update"
+                            size={16}
+                            color="#0369a1"
+                          />
+                          <Text
+                            style={[
+                              styles.consentCardText,
+                              { color: "#0369a1" },
+                            ]}
+                          >
+                            {isSent
+                              ? `You requested an immediate location update`
+                              : `${contact?.name ?? peerId} requested your current location`}
+                          </Text>
+                          <Text style={styles.consentCardTime}>
+                            {formatTime(msg.timestamp)}
+                          </Text>
+                        </View>
+                      </View>
+                    );
+                  }
                   const isReq = msg.text === TRACK_REQ_TEXT;
                   const isOk = msg.text === TRACK_OK_TEXT;
                   const icon: ComponentProps<typeof MaterialIcons>["name"] =
@@ -573,7 +647,12 @@ export default function ChatThreadScreen() {
                     );
                   }
 
-                  // Received pings: show the full embedded map for the requestor.
+                  // Received pings: show the full embedded map for the requester.
+                  // If no offline map is downloaded yet, show a download prompt.
+                  const mapReady = offlineMap.status === "complete";
+                  const mapChecking =
+                    offlineMap.status === "checking" ||
+                    offlineMap.status === "downloading";
                   return (
                     <View
                       key={msg.id}
@@ -590,40 +669,7 @@ export default function ChatThreadScreen() {
                         style={[styles.bubbleCol, styles.bubbleColReceived]}
                       >
                         <View style={[styles.mapCard, styles.mapCardReceived]}>
-                          {coord ? (
-                            <View style={styles.mapThumb} pointerEvents="none">
-                              <MapView
-                                style={StyleSheet.absoluteFillObject}
-                                mapStyle={OFFLINE_STYLE_URL}
-                                logoEnabled={false}
-                                attributionEnabled={false}
-                                compassEnabled={false}
-                                scrollEnabled={false}
-                                zoomEnabled={false}
-                                rotateEnabled={false}
-                                pitchEnabled={false}
-                              >
-                                <Camera
-                                  defaultSettings={{
-                                    centerCoordinate: coord,
-                                    zoomLevel: 13,
-                                  }}
-                                  animationMode="none"
-                                />
-                                <PointAnnotation
-                                  id={`pin-${msg.id}`}
-                                  coordinate={coord}
-                                >
-                                  <View
-                                    style={[
-                                      styles.mapPinDot,
-                                      styles.mapPinDotReceived,
-                                    ]}
-                                  />
-                                </PointAnnotation>
-                              </MapView>
-                            </View>
-                          ) : (
+                          {!coord ? (
                             <View style={styles.mapThumbFallback}>
                               <MaterialIcons
                                 name="location-off"
@@ -634,6 +680,94 @@ export default function ChatThreadScreen() {
                                 No coordinates
                               </Text>
                             </View>
+                          ) : mapChecking ? (
+                            <View style={styles.mapThumbFallback}>
+                              <ActivityIndicator size="small" color="#0ea5e9" />
+                              <Text style={styles.mapThumbFallbackText}>
+                                Checking map data…
+                              </Text>
+                            </View>
+                          ) : mapReady ? (
+                            <Pressable
+                              style={styles.mapThumb}
+                              onPress={() => {
+                                setExpandedCoord(coord);
+                                setExpandedLabel(
+                                  `${fmtCoord(msg.lat, 5)}, ${fmtCoord(msg.lng, 5)}`,
+                                );
+                                setExpandedZoom(13);
+                              }}
+                            >
+                              <View
+                                style={StyleSheet.absoluteFillObject}
+                                pointerEvents="none"
+                              >
+                                <MapView
+                                  style={StyleSheet.absoluteFillObject}
+                                  mapStyle={OFFLINE_STYLE_URL}
+                                  logoEnabled={false}
+                                  attributionEnabled={false}
+                                  compassEnabled={false}
+                                  scrollEnabled={false}
+                                  zoomEnabled={false}
+                                  rotateEnabled={false}
+                                  pitchEnabled={false}
+                                >
+                                  <Camera
+                                    defaultSettings={{
+                                      centerCoordinate: coord,
+                                      zoomLevel: 13,
+                                    }}
+                                    animationMode="none"
+                                  />
+                                  <PointAnnotation
+                                    id={`pin-${msg.id}`}
+                                    coordinate={coord}
+                                  >
+                                    <View
+                                      style={[
+                                        styles.mapPinDot,
+                                        styles.mapPinDotReceived,
+                                      ]}
+                                    />
+                                  </PointAnnotation>
+                                </MapView>
+                              </View>
+                              <View style={styles.mapExpandOverlay}>
+                                <MaterialIcons
+                                  name="open-in-full"
+                                  size={14}
+                                  color="#fff"
+                                />
+                                <Text style={styles.mapExpandOverlayText}>
+                                  Tap to expand
+                                </Text>
+                              </View>
+                            </Pressable>
+                          ) : (
+                            // No offline map downloaded — prompt the user
+                            <Pressable
+                              style={styles.mapDownloadPrompt}
+                              onPress={() => router.push("/(tabs)/map")}
+                            >
+                              <MaterialIcons
+                                name="download-for-offline"
+                                size={32}
+                                color="#0ea5e9"
+                              />
+                              <Text style={styles.mapDownloadPromptTitle}>
+                                Offline map required
+                              </Text>
+                              <Text style={styles.mapDownloadPromptBody}>
+                                Location received ·{" "}
+                                {`${fmtCoord(msg.lat, 4)}, ${fmtCoord(msg.lng, 4)}`}
+                              </Text>
+                              <View style={styles.mapDownloadPromptBtn}>
+                                <Text style={styles.mapDownloadPromptBtnText}>
+                                  Go to Map tab to download
+                                </Text>
+                              </View>
+                            </Pressable>
                           )}
                           <View style={styles.mapCardFooter}>
                             <MaterialIcons
@@ -863,6 +997,27 @@ export default function ChatThreadScreen() {
                             : "Request Track"}
                   </Text>
                 </Pressable>
+
+                {/* ── On-demand ping button (A/requester only) ── */}
+                {consentState === "granted" && !trackingActive && (
+                  <Pressable
+                    style={[
+                      styles.pingNowBtn,
+                      requestingNow && { opacity: 0.6 },
+                    ]}
+                    onPress={handleRequestNow}
+                    disabled={requestingNow}
+                  >
+                    {requestingNow ? (
+                      <ActivityIndicator size="small" color="#0ea5e9" />
+                    ) : (
+                      <MaterialIcons name="update" size={14} color="#0ea5e9" />
+                    )}
+                    <Text style={styles.pingNowBtnText}>
+                      {requestingNow ? "Waiting…" : "Ping Now"}
+                    </Text>
+                  </Pressable>
+                )}
               </View>
 
               <View style={styles.inputRow}>
@@ -900,6 +1055,110 @@ export default function ChatThreadScreen() {
           </View>
         </KeyboardAvoidingView>
       </SafeAreaView>
+
+      {/* ── Expanded Map Modal ── */}
+      <Modal
+        visible={!!expandedCoord}
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={() => setExpandedCoord(null)}
+      >
+        <View style={styles.mapFullScreen}>
+          {expandedCoord && (
+            <MapView
+              style={StyleSheet.absoluteFillObject}
+              mapStyle={OFFLINE_STYLE_URL}
+              logoEnabled={false}
+              attributionEnabled={false}
+              compassEnabled={true}
+              compassViewPosition={1}
+              scrollEnabled={true}
+              zoomEnabled={true}
+              rotateEnabled={true}
+              pitchEnabled={true}
+            >
+              <Camera
+                ref={expandedCamRef}
+                defaultSettings={{
+                  centerCoordinate: expandedCoord,
+                  zoomLevel: expandedZoom,
+                }}
+                animationMode="none"
+              />
+              <PointAnnotation id="expanded-pin" coordinate={expandedCoord}>
+                <View
+                  style={[
+                    styles.mapPinDot,
+                    styles.mapPinDotReceived,
+                    styles.mapPinDotLarge,
+                  ]}
+                />
+              </PointAnnotation>
+            </MapView>
+          )}
+
+          {/* Close button */}
+          <Pressable
+            style={[styles.mapFullCloseBtn, { top: insets.top + 12 }]}
+            onPress={() => setExpandedCoord(null)}
+          >
+            <MaterialIcons name="close" size={22} color="#fff" />
+          </Pressable>
+
+          {/* Zoom controls */}
+          <View style={[styles.mapFullZoomControls, { top: insets.top + 72 }]}>
+            <Pressable
+              style={styles.mapFullZoomBtn}
+              onPress={() => {
+                const next = expandedZoom + 1;
+                setExpandedZoom(next);
+                expandedCamRef.current?.setCamera({
+                  zoomLevel: next,
+                  animationDuration: 250,
+                });
+              }}
+            >
+              <MaterialIcons name="add" size={20} color="#181411" />
+            </Pressable>
+            <View style={styles.mapFullZoomDivider} />
+            <Pressable
+              style={styles.mapFullZoomBtn}
+              onPress={() => {
+                const next = Math.max(1, expandedZoom - 1);
+                setExpandedZoom(next);
+                expandedCamRef.current?.setCamera({
+                  zoomLevel: next,
+                  animationDuration: 250,
+                });
+              }}
+            >
+              <MaterialIcons name="remove" size={20} color="#181411" />
+            </Pressable>
+          </View>
+
+          {/* Re-centre button */}
+          <Pressable
+            style={[styles.mapFullRecentreBtn, { bottom: insets.bottom + 80 }]}
+            onPress={() =>
+              expandedCamRef.current?.setCamera({
+                centerCoordinate: expandedCoord ?? undefined,
+                zoomLevel: 13,
+                animationDuration: 400,
+              })
+            }
+          >
+            <MaterialIcons name="my-location" size={20} color="#0ea5e9" />
+          </Pressable>
+
+          {/* Coordinate strip */}
+          <View
+            style={[styles.mapFullCoordBar, { bottom: insets.bottom + 16 }]}
+          >
+            <MaterialIcons name="location-on" size={14} color="#0ea5e9" />
+            <Text style={styles.mapFullCoordText}>{expandedLabel}</Text>
+          </View>
+        </View>
+      </Modal>
 
       {/* ── Address Book Modal ── */}
       <Modal
@@ -1173,6 +1432,7 @@ const styles = StyleSheet.create({
   consentCardReq: { backgroundColor: "#fef3c7", borderColor: "#fde68a" },
   consentCardOk: { backgroundColor: "#dcfce7", borderColor: "#bbf7d0" },
   consentCardNo: { backgroundColor: "#fee2e2", borderColor: "#fecaca" },
+  consentCardLocReq: { backgroundColor: "#e0f2fe", borderColor: "#bae6fd" },
   consentCardText: { flex: 1, fontSize: 12, fontWeight: "600" },
   consentCardTime: { fontSize: 10, color: "#a09080", fontWeight: "500" },
 
@@ -1281,6 +1541,39 @@ const styles = StyleSheet.create({
   },
   mapPinDotSent: { backgroundColor: "#f27f0d" },
   mapPinDotReceived: { backgroundColor: "#0ea5e9" },
+  mapDownloadPrompt: {
+    width: 240,
+    height: 160,
+    alignItems: "center" as const,
+    justifyContent: "center" as const,
+    backgroundColor: "#e8f4fd",
+    paddingHorizontal: 16,
+    gap: 5,
+  },
+  mapDownloadPromptTitle: {
+    fontSize: 13,
+    fontWeight: "700" as const,
+    color: "#0369a1",
+    textAlign: "center" as const,
+  },
+  mapDownloadPromptBody: {
+    fontSize: 11,
+    color: "#6b7280",
+    textAlign: "center" as const,
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+  },
+  mapDownloadPromptBtn: {
+    marginTop: 6,
+    backgroundColor: "#0ea5e9",
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  mapDownloadPromptBtnText: {
+    fontSize: 12,
+    fontWeight: "700" as const,
+    color: "#fff",
+  },
   locSentPill: {
     flexDirection: "row" as const,
     alignItems: "center" as const,
@@ -1371,6 +1664,23 @@ const styles = StyleSheet.create({
   trackPillTextRequesting: { color: "#92400e" },
   trackPillTextDenied: { color: "#991b1b" },
   trackPillTextGranted: { color: "#16a34a" },
+  pingNowBtn: {
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#0ea5e933",
+    backgroundColor: "#0ea5e90d",
+    marginLeft: 6,
+  },
+  pingNowBtnText: {
+    fontSize: 12,
+    fontWeight: "600" as const,
+    color: "#0ea5e9",
+  },
   inputRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   input: {
     flex: 1,
@@ -1554,5 +1864,101 @@ const styles = StyleSheet.create({
     borderColor: "#fecaca",
     alignItems: "center",
     justifyContent: "center",
+  },
+  // ── Expanded map modal ────────────────────────────────────────────────────
+  mapFullScreen: {
+    flex: 1,
+    backgroundColor: "#000",
+  },
+  mapFullCloseBtn: {
+    position: "absolute" as const,
+    left: 16,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    alignItems: "center" as const,
+    justifyContent: "center" as const,
+  },
+  mapFullZoomControls: {
+    position: "absolute" as const,
+    right: 16,
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    overflow: "hidden" as const,
+    elevation: 4,
+    shadowColor: "#000",
+    shadowOpacity: 0.18,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+  },
+  mapFullZoomBtn: {
+    width: 44,
+    height: 44,
+    alignItems: "center" as const,
+    justifyContent: "center" as const,
+  },
+  mapFullZoomDivider: {
+    height: 1,
+    backgroundColor: "#e6e0db",
+    marginHorizontal: 8,
+  },
+  mapFullRecentreBtn: {
+    position: "absolute" as const,
+    right: 16,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "#fff",
+    alignItems: "center" as const,
+    justifyContent: "center" as const,
+    elevation: 4,
+    shadowColor: "#000",
+    shadowOpacity: 0.18,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+  },
+  mapFullCoordBar: {
+    position: "absolute" as const,
+    left: 16,
+    right: 16,
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    gap: 6,
+    backgroundColor: "rgba(0,0,0,0.6)",
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
+  },
+  mapFullCoordText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: "600" as const,
+    color: "#fff",
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+  },
+  // ── Thumbnail expand overlay ──────────────────────────────────────────────
+  mapExpandOverlay: {
+    position: "absolute" as const,
+    bottom: 8,
+    right: 8,
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    gap: 4,
+    backgroundColor: "rgba(0,0,0,0.45)",
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  mapExpandOverlayText: {
+    fontSize: 11,
+    color: "#fff",
+    fontWeight: "600" as const,
+  },
+  mapPinDotLarge: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 3,
   },
 });

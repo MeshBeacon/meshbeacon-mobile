@@ -58,6 +58,11 @@ export const LOCATION_PING_TEXT = "[LOC]";
 export const TRACK_REQ_TEXT = "[TRACK_REQ]";
 export const TRACK_OK_TEXT = "[TRACK_OK]";
 export const TRACK_NO_TEXT = "[TRACK_NO]";
+/**
+ * LOC_REQ_TEXT  A → B: "Send me your location right now, skip the timer."
+ * B receives it and fires an immediate forced ping, then resets the countdown.
+ */
+export const LOC_REQ_TEXT = "[LOC_REQ]";
 
 interface Options {
   active: boolean;
@@ -79,7 +84,11 @@ export function useLocationTracking({
   serialStatus,
   sendMTalk,
   onError,
-}: Options): { secondsLeft: number; currentIntervalMs: number } {
+}: Options): {
+  secondsLeft: number;
+  currentIntervalMs: number;
+  sendPingNow: () => Promise<void>;
+} {
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [currentIntervalMs, setCurrentIntervalMs] =
     useState(TRACKING_INTERVAL_MS);
@@ -114,7 +123,8 @@ export function useLocationTracking({
   // ── Core ping function ────────────────────────────────────────────────────
   // Returns true when a ping was actually transmitted, false when skipped
   // (no GPS fix, disconnected, or below movement threshold).
-  const sendPing = useCallback(async (): Promise<boolean> => {
+  // Pass force=true to bypass the movement-threshold check (used for on-demand pings).
+  const sendPing = useCallback(async (force = false): Promise<boolean> => {
     const peer = targetPeerRef.current;
     const currentGps = gpsRef.current;
     const serStatus = serialStatusRef.current;
@@ -137,7 +147,8 @@ export function useLocationTracking({
     // ── Movement threshold ───────────────────────────────────────────────
     // Skip the ping if the sender has not moved meaningfully since the last
     // successful transmission — saves both the LoRa radio burst and GPS power.
-    if (lastSentCoordsRef.current) {
+    // force=true bypasses this check for on-demand (LOC_REQ) pings.
+    if (!force && lastSentCoordsRef.current) {
       const dist = haversineM(lastSentCoordsRef.current, location);
       if (dist < MIN_DISTANCE_M) {
         // Silently skip — not an error, just stationary
@@ -167,6 +178,8 @@ export function useLocationTracking({
   const nextPingAtRef = useRef<number>(0);
   const lastSentCoordsRef = useRef<GpsCoords | null>(null);
   const currentIntervalMsRef = useRef<number>(TRACKING_INTERVAL_MS);
+  // Holds the schedulePing function so sendPingNow can reschedule from outside the effect
+  const scheduleRef = useRef<((delayMs: number) => void) | null>(null);
 
   useEffect(() => {
     if (!active) {
@@ -186,6 +199,7 @@ export function useLocationTracking({
     // Schedule the next ping after `delayMs`, then chain via setTimeout so the
     // interval can be adjusted dynamically based on movement.
     const schedulePing = (delayMs: number) => {
+      scheduleRef.current = schedulePing; // keep ref current
       nextPingAtRef.current = Date.now() + delayMs;
       setSecondsLeft(Math.round(delayMs / 1000));
 
@@ -209,6 +223,8 @@ export function useLocationTracking({
         schedulePing(currentIntervalMsRef.current);
       }, delayMs);
     };
+
+    scheduleRef.current = schedulePing;
 
     // Send the first ping immediately on activation, then start the chain
     const boot = async () => {
@@ -237,7 +253,20 @@ export function useLocationTracking({
     };
   }, [active, sendPing]);
 
-  return { secondsLeft, currentIntervalMs };
+  // ── On-demand forced ping (called when LOC_REQ is received) ─────────────
+  // Bypasses the movement threshold, cancels the pending timer, sends
+  // immediately, then resets backoff and reschedules from the base interval.
+  const sendPingNow = useCallback(async () => {
+    if (!activeRef.current) return;
+    if (pingTimeoutRef.current) clearTimeout(pingTimeoutRef.current);
+    await sendPing(true); // force — ignore movement threshold
+    if (!activeRef.current) return;
+    currentIntervalMsRef.current = TRACKING_INTERVAL_MS;
+    setCurrentIntervalMs(TRACKING_INTERVAL_MS);
+    scheduleRef.current?.(TRACKING_INTERVAL_MS);
+  }, [sendPing]);
+
+  return { secondsLeft, currentIntervalMs, sendPingNow };
 }
 
 /** Format a number of seconds as "1m 30s" or "45s". */
