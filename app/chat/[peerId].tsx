@@ -547,7 +547,9 @@ export default function ChatThreadScreen() {
                               </Text>
                             )}
                           </View>
-                          <View style={[styles.bubbleMeta, styles.bubbleMetaSent]}>
+                          <View
+                            style={[styles.bubbleMeta, styles.bubbleMetaSent]}
+                          >
                             <Text style={styles.timeText}>
                               {formatTime(msg.timestamp)}
                             </Text>
@@ -641,7 +643,10 @@ export default function ChatThreadScreen() {
                               color="#0ea5e9"
                             />
                             <Text
-                              style={[styles.mapCardLabel, { color: "#0ea5e9" }]}
+                              style={[
+                                styles.mapCardLabel,
+                                { color: "#0ea5e9" },
+                              ]}
                             >
                               Location Update
                             </Text>
