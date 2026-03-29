@@ -69,10 +69,6 @@ interface Options {
     text: string,
     location?: { latitude: number; longitude: number },
   ) => Promise<void>;
-  addSent: (
-    text: string,
-    location?: { latitude: number; longitude: number },
-  ) => void;
   onError: (msg: string) => void;
 }
 
@@ -82,7 +78,6 @@ export function useLocationTracking({
   gps,
   serialStatus,
   sendMTalk,
-  addSent,
   onError,
 }: Options): { secondsLeft: number; currentIntervalMs: number } {
   const [secondsLeft, setSecondsLeft] = useState(0);
@@ -94,7 +89,6 @@ export function useLocationTracking({
   const serialStatusRef = useRef(serialStatus);
   const targetPeerRef = useRef(targetPeer);
   const sendMTalkRef = useRef(sendMTalk);
-  const addSentRef = useRef(addSent);
   const onErrorRef = useRef(onError);
   const activeRef = useRef(active);
 
@@ -110,9 +104,6 @@ export function useLocationTracking({
   useEffect(() => {
     sendMTalkRef.current = sendMTalk;
   }, [sendMTalk]);
-  useEffect(() => {
-    addSentRef.current = addSent;
-  }, [addSent]);
   useEffect(() => {
     onErrorRef.current = onError;
   }, [onError]);
@@ -156,7 +147,6 @@ export function useLocationTracking({
 
     try {
       await sendMTalkRef.current(peer, LOCATION_PING_TEXT, location);
-      addSentRef.current(LOCATION_PING_TEXT, location);
       lastSentCoordsRef.current = location;
       return true;
     } catch (err) {

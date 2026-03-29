@@ -282,7 +282,6 @@ export default function ChatThreadScreen() {
     gps,
     serialStatus: status,
     sendMTalk,
-    addSent,
     onError: (msg) => showToast(msg, "warning"),
   });
 
