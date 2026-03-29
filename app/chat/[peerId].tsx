@@ -43,6 +43,7 @@ import { useSerial } from "@/contexts/serial-context";
 import { useToast } from "@/contexts/toast-context";
 import {
   formatCountdown,
+  LOC_REQ_TEXT,
   LOCATION_PING_TEXT,
   TRACK_NO_TEXT,
   TRACK_OK_TEXT,
