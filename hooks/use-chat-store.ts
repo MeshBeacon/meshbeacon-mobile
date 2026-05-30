@@ -57,10 +57,29 @@ interface StorageFormat {
 
 // ── AsyncStorage helpers ──────────────────────────────────────────────────────
 
+/** Ensure every message has a valid numeric timestamp (fixes data from old builds). */
+function sanitizeMessages(msgs: ChatMessage[]): ChatMessage[] {
+  return msgs.map((m) =>
+    m.timestamp && !isNaN(m.timestamp) ? m : { ...m, timestamp: Date.now() },
+  );
+}
+
 async function loadStorage(): Promise<StorageFormat> {
   try {
     const raw = await AsyncStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw) as StorageFormat;
+    if (raw) {
+      const parsed = JSON.parse(raw) as StorageFormat;
+      const sanitized: StorageFormat = {
+        ...parsed,
+        threads: Object.fromEntries(
+          Object.entries(parsed.threads).map(([k, v]) => [
+            k,
+            sanitizeMessages(v),
+          ]),
+        ),
+      };
+      return sanitized;
+    }
 
     // ── Migrate from legacy flat-list format ──────────────────────────────
     const [legacyRaw, legacyPeer] = await Promise.all([

@@ -1,56 +1,30 @@
 import { MaterialIcons } from "@expo/vector-icons";
-import {
-  Camera,
-  MapView,
-  PointAnnotation,
-  type CameraRef,
-} from "@maplibre/maplibre-react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ComponentProps,
-} from "react";
-import {
-  ActivityIndicator,
-  Keyboard,
-  KeyboardAvoidingView,
-  Modal,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
+    ActivityIndicator,
+    Keyboard,
+    KeyboardAvoidingView,
+    Modal,
+    Platform,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    View,
 } from "react-native";
 import {
-  SafeAreaView,
-  useSafeAreaInsets,
+    SafeAreaView,
+    useSafeAreaInsets,
 } from "react-native-safe-area-context";
 
 import { SerialStatusBanner } from "@/components/serial-status-banner";
 import { useAddressBookCtx } from "@/contexts/address-book-context";
 import { useChatStoreCtx } from "@/contexts/chat-store-context";
-import {
-  useLocationAccuracy,
-  useLocationCtx,
-} from "@/contexts/location-context";
+import { useLocationCtx } from "@/contexts/location-context";
 import { useSerial } from "@/contexts/serial-context";
 import { useToast } from "@/contexts/toast-context";
-import {
-  LOC_REQ_TEXT,
-  LOCATION_PING_TEXT,
-  TRACK_NO_TEXT,
-  TRACK_OK_TEXT,
-  TRACK_REQ_TEXT,
-  useLocationTracking,
-} from "@/hooks/use-location-tracking";
-import { OFFLINE_STYLE_URL, useOfflineMap } from "@/hooks/use-offline-map";
-import * as Location from "expo-location";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -59,8 +33,10 @@ const fmtCoord = (v: string | undefined, dp: number): string => {
   return isNaN(n) ? "?" : n.toFixed(dp);
 };
 
-const formatTime = (ts: number): string => {
+const formatTime = (ts: number | undefined): string => {
+  if (!ts) return "—";
   const d = new Date(ts);
+  if (isNaN(d.getTime())) return "—";
   const now = new Date();
   const isToday = d.toDateString() === now.toDateString();
   const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -79,12 +55,10 @@ export default function ChatThreadScreen() {
   const router = useRouter();
 
   const { status, sendMTalk } = useSerial();
-  const offlineMap = useOfflineMap();
   const insets = useSafeAreaInsets();
   const { getMessages, addSent: storAddSent, markRead } = useChatStoreCtx();
   const { showToast } = useToast();
   const gps = useLocationCtx();
-  const requestAccuracy = useLocationAccuracy();
   const { contacts, addContact, removeContact, hasContact } =
     useAddressBookCtx();
 
@@ -113,19 +87,11 @@ export default function ChatThreadScreen() {
   // Contact info for this peer
   const contact = contacts.find((c) => c.duckId === peerId);
 
-  // Address book modal
+  // ── Address book modal ────────────────────────────────────────────────────
   const [abOpen, setAbOpen] = useState(false);
   const [addingContact, setAddingContact] = useState(false);
   const [contactNameDraft, setContactNameDraft] = useState("");
   const [contactIdDraft, setContactIdDraft] = useState("");
-
-  // Expanded map modal
-  const [expandedCoord, setExpandedCoord] = useState<[number, number] | null>(
-    null,
-  );
-  const [expandedLabel, setExpandedLabel] = useState("");
-  const [expandedZoom, setExpandedZoom] = useState(13);
-  const expandedCamRef = useRef<CameraRef>(null);
 
   const openAddContact = (prefillId = "") => {
     setContactNameDraft("");
@@ -145,206 +111,12 @@ export default function ChatThreadScreen() {
     }
   };
 
-  // Compose state
+  // ── Compose state ─────────────────────────────────────────────────────────
   const [message, setMessage] = useState("");
   const [attachGps, setAttachGps] = useState(true);
-  const [trackingActive, setTrackingActive] = useState(false);
-  const trackingActiveRef = useRef(false);
-  useEffect(() => {
-    trackingActiveRef.current = trackingActive;
-  }, [trackingActive]);
   const [sending, setSending] = useState(false);
 
-  // ── Tracking consent state machine ────────────────────────────────────────
-  //
-  // Two independent roles, tracked separately:
-  //
-  // consentState — OUR role as the REQUESTER (A wants to see B's location)
-  //   "idle"       – no request sent
-  //   "requesting" – we sent [TRACK_REQ], waiting for B to respond
-  //   "granted"    – B agreed; B is now actively sending us their location
-  //   "denied"     – B declined our request
-  //
-  // trackingActive — OUR role as the SHARER (B asked us to share our location)
-  //   false – not sharing
-  //   true  – we accepted B's request and are sending periodic location pings
-  //
-  // Both states can be true simultaneously if both sides have requested each
-  // other, but by default only one role is active at a time.
-  const [consentState, setConsentState] = useState<
-    "idle" | "requesting" | "granted" | "denied"
-  >("idle");
-
-  // True when the peer has sent us a [TRACK_REQ] and we haven't replied yet
-  const [hasPendingReq, setHasPendingReq] = useState(false);
-
-  // True while A has sent [LOC_REQ] and is waiting for B's next [LOC] ping
-  const [requestingNow, setRequestingNow] = useState(false);
-
-  // Ref so the message-scan effect can always call the latest sendPingNow
-  // without adding it as a dependency (it comes from the tracking hook below).
-  const sendPingNowRef = useRef<() => Promise<void>>(async () => {});
-
-  // Watch incoming messages for consent signals and react
-  const prevMsgCountRef = useRef(0);
-  useEffect(() => {
-    const prev = prevMsgCountRef.current;
-    prevMsgCountRef.current = messages.length;
-    if (messages.length <= prev) return; // no new messages
-
-    // Scan only newly arrived messages (received direction)
-    const newMsgs = messages.slice(prev);
-    for (const m of newMsgs) {
-      if (m.direction !== "received") continue;
-      if (m.text === TRACK_REQ_TEXT) {
-        // Peer wants to see our location — show consent banner
-        setHasPendingReq(true);
-      } else if (m.text === TRACK_OK_TEXT) {
-        // Peer agreed to our tracking request — they will now send us pings
-        setConsentState("granted");
-        showToast(
-          `${contact?.name ?? peerId} is now sharing their location.`,
-          "success",
-        );
-      } else if (m.text === TRACK_NO_TEXT) {
-        if (trackingActiveRef.current) {
-          // Peer revoked our sharing session — stop sending pings
-          setTrackingActive(false);
-          showToast(
-            `${contact?.name ?? peerId} stopped the location sharing.`,
-            "warning",
-          );
-        } else {
-          // Peer declined our tracking request
-          setConsentState("denied");
-          showToast(
-            `${contact?.name ?? peerId} declined location sharing.`,
-            "warning",
-          );
-        }
-      } else if (m.text === LOC_REQ_TEXT) {
-        // Peer is requesting an immediate location update from us — fire a forced ping
-        if (trackingActiveRef.current) {
-          sendPingNowRef.current();
-        }
-      } else if (m.text === LOCATION_PING_TEXT && m.hasLocation) {
-        // We received a location ping — clear the "requesting now" spinner
-        setRequestingNow(false);
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages.length]);
-
-  // Send a consent request to the peer
-  const handleRequestTrack = async () => {
-    if (status === "disconnected" || status === "error") {
-      showToast("Connect to the device first.", "error");
-      return;
-    }
-    try {
-      await sendMTalk(peerId, TRACK_REQ_TEXT);
-      addSent(TRACK_REQ_TEXT);
-      setConsentState("requesting");
-    } catch (err) {
-      showToast((err as Error).message, "error");
-    }
-  };
-
-  // Accept an incoming [TRACK_REQ] from peer — we start sending our location to them
-  const handleConsentAccept = async () => {
-    setHasPendingReq(false);
-    try {
-      await sendMTalk(peerId, TRACK_OK_TEXT);
-      addSent(TRACK_OK_TEXT);
-      setTrackingActive(true);
-      showToast(
-        `You accepted location tracking from ${contact?.name ?? peerId}.`,
-        "success",
-      );
-    } catch (err) {
-      showToast((err as Error).message, "error");
-    }
-  };
-
-  // Decline an incoming [TRACK_REQ] from peer
-  const handleConsentDecline = async () => {
-    setHasPendingReq(false);
-    try {
-      await sendMTalk(peerId, TRACK_NO_TEXT);
-      addSent(TRACK_NO_TEXT);
-    } catch (err) {
-      showToast((err as Error).message, "error");
-    }
-  };
-
-  // Stop sharing our location and notify peer so they know pings have stopped
-  const handleStopSharing = async () => {
-    setTrackingActive(false);
-    try {
-      await sendMTalk(peerId, TRACK_NO_TEXT);
-      addSent(TRACK_NO_TEXT);
-    } catch {
-      // Best-effort — local state is already cleared
-    }
-  };
-
-  // Cancel/revoke our tracking request when we are the RECEIVER
-  // (i.e. we requested B to share, B agreed, now we want to stop receiving)
-  const handleRevokeTracking = async () => {
-    setConsentState("idle");
-    try {
-      await sendMTalk(peerId, TRACK_NO_TEXT);
-      addSent(TRACK_NO_TEXT);
-    } catch {
-      // Best-effort
-    }
-  };
-
-  const { sendPingNow } = useLocationTracking({
-    active: trackingActive,
-    targetPeer: peerId,
-    gps,
-    serialStatus: status,
-    sendMTalk,
-    onError: (msg) => showToast(msg, "warning"),
-  });
-
-  // Keep the ref in sync so the message-scan effect can call it safely
-  useEffect(() => {
-    sendPingNowRef.current = sendPingNow;
-  }, [sendPingNow]);
-
-  // Request an immediate location update from the peer (A → B)
-  const handleRequestNow = async () => {
-    if (status === "disconnected" || status === "error") {
-      showToast("Connect to the device first.", "error");
-      return;
-    }
-    try {
-      await sendMTalk(peerId, LOC_REQ_TEXT);
-      setRequestingNow(true);
-    } catch (err) {
-      showToast((err as Error).message, "error");
-    }
-  };
-
-  // Upgrade GPS to Balanced accuracy while tracking is active so the
-  // movement-threshold check is precise enough to detect 30 m movement.
-  // Releases back to Low (cell-tower) automatically when tracking stops.
-  useEffect(() => {
-    requestAccuracy(trackingActive ? Location.Accuracy.Balanced : null);
-    return () => requestAccuracy(null);
-  }, [trackingActive, requestAccuracy]);
-
-  // Auto-stop sharing on disconnect
-  useEffect(() => {
-    if ((status === "disconnected" || status === "error") && trackingActive) {
-      setTrackingActive(false);
-      showToast("Location sharing stopped: device disconnected.", "warning");
-    }
-  }, [status, trackingActive, showToast]);
-
-  // Scroll to bottom on new messages
+  // ── Scroll to bottom on new messages ─────────────────────────────────────
   useEffect(() => {
     if (!messages) return;
     const animated = initialScrollDone.current;
@@ -371,7 +143,7 @@ export default function ChatThreadScreen() {
     };
   }, []);
 
-  // ── Send ─────────────────────────────────────────────────────────────────
+  // ── Send ──────────────────────────────────────────────────────────────────
   const handleSend = async () => {
     if (!message.trim()) {
       showToast("Please type a message before sending.", "warning");
@@ -434,357 +206,31 @@ export default function ChatThreadScreen() {
 
             <SerialStatusBanner />
 
-            {/* ── Incoming tracking consent request banner ── */}
-            {hasPendingReq && (
-              <View style={styles.consentBanner}>
-                <MaterialIcons
-                  name="location-searching"
-                  size={16}
-                  color="#92400e"
-                />
-                <Text style={styles.consentBannerText} numberOfLines={2}>
-                  {contact?.name ?? peerId} wants to track your location
-                </Text>
-                <Pressable
-                  style={styles.consentDeclineBtn}
-                  onPress={handleConsentDecline}
-                >
-                  <Text style={styles.consentDeclineBtnText}>Decline</Text>
-                </Pressable>
-                <Pressable
-                  style={styles.consentAcceptBtn}
-                  onPress={handleConsentAccept}
-                >
-                  <Text style={styles.consentAcceptBtnText}>Accept</Text>
-                </Pressable>
-              </View>
-            )}
-
-            {/* ── Active tracking banner ── */}
-            {trackingActive && (
-              <View style={styles.trackingBanner}>
-                <MaterialIcons name="my-location" size={14} color="#fff" />
-                <Text style={styles.trackingBannerText}>
-                  Sharing location with {contact?.name ?? peerId}
-                </Text>
-                <Pressable
-                  onPress={handleStopSharing}
-                  style={styles.trackingStop}
-                >
-                  <MaterialIcons name="stop" size={14} color="#fff" />
-                </Pressable>
-              </View>
-            )}
-
-            {/* ── Chat history ── */}
+            {/* ── History ── */}
             <ScrollView
               ref={scrollRef}
               contentContainerStyle={styles.list}
               showsVerticalScrollIndicator={false}
               onContentSizeChange={() => {
-                if (keyboardVisible.current)
+                if (keyboardVisible.current) {
                   scrollRef.current?.scrollToEnd({ animated: true });
+                }
               }}
             >
               {messages.length === 0 && (
                 <View style={styles.emptyState}>
-                  <MaterialIcons name="forum" size={40} color="#d1c5b8" />
+                  <MaterialIcons
+                    name="chat-bubble-outline"
+                    size={40}
+                    color="#d1c5b8"
+                  />
                   <Text style={styles.emptyTitle}>No messages yet</Text>
-                  <Text style={styles.emptyHint}>
-                    Send a message to {contact?.name ?? peerId}
-                  </Text>
+                  <Text style={styles.emptyHint}>Start the conversation</Text>
                 </View>
               )}
 
               {messages.map((msg) => {
                 const isSent = msg.direction === "sent";
-
-                // ── Tracking consent system messages ─────────────────────────
-                if (
-                  msg.text === TRACK_REQ_TEXT ||
-                  msg.text === TRACK_OK_TEXT ||
-                  msg.text === TRACK_NO_TEXT ||
-                  msg.text === LOC_REQ_TEXT
-                ) {
-                  // LOC_REQ: compact inline system event card
-                  if (msg.text === LOC_REQ_TEXT) {
-                    return (
-                      <View key={msg.id} style={styles.systemRow}>
-                        <View
-                          style={[styles.consentCard, styles.consentCardLocReq]}
-                        >
-                          <MaterialIcons
-                            name="update"
-                            size={16}
-                            color="#0369a1"
-                          />
-                          <Text
-                            style={[
-                              styles.consentCardText,
-                              { color: "#0369a1" },
-                            ]}
-                          >
-                            {isSent
-                              ? `You requested an immediate location update`
-                              : `${contact?.name ?? peerId} requested your current location`}
-                          </Text>
-                          <Text style={styles.consentCardTime}>
-                            {formatTime(msg.timestamp)}
-                          </Text>
-                        </View>
-                      </View>
-                    );
-                  }
-                  const isReq = msg.text === TRACK_REQ_TEXT;
-                  const isOk = msg.text === TRACK_OK_TEXT;
-                  const icon: ComponentProps<typeof MaterialIcons>["name"] =
-                    isReq
-                      ? "location-searching"
-                      : isOk
-                        ? "check-circle"
-                        : "cancel";
-                  const label = isReq
-                    ? isSent
-                      ? "You requested to track their location"
-                      : `${contact?.name ?? peerId} wants to track your location`
-                    : isOk
-                      ? isSent
-                        ? "You accepted location sharing"
-                        : `${contact?.name ?? peerId} accepted location sharing`
-                      : isSent
-                        ? "You declined location sharing"
-                        : `${contact?.name ?? peerId} declined location sharing`;
-                  const cardStyle = isReq
-                    ? styles.consentCardReq
-                    : isOk
-                      ? styles.consentCardOk
-                      : styles.consentCardNo;
-                  const iconColor = isReq
-                    ? "#92400e"
-                    : isOk
-                      ? "#166534"
-                      : "#991b1b";
-                  return (
-                    <View key={msg.id} style={styles.systemRow}>
-                      <View style={[styles.consentCard, cardStyle]}>
-                        <MaterialIcons
-                          name={icon}
-                          size={16}
-                          color={iconColor}
-                        />
-                        <Text
-                          style={[styles.consentCardText, { color: iconColor }]}
-                        >
-                          {label}
-                        </Text>
-                        <Text style={styles.consentCardTime}>
-                          {formatTime(msg.timestamp)}
-                        </Text>
-                      </View>
-                    </View>
-                  );
-                }
-
-                if (msg.text === LOCATION_PING_TEXT && msg.hasLocation) {
-                  const hasCoords = !!(msg.lat && msg.lng);
-                  const coord: [number, number] | null = hasCoords
-                    ? [parseFloat(msg.lng!), parseFloat(msg.lat!)]
-                    : null;
-
-                  // Sent pings: show a compact confirmation pill — the map is
-                  // only meaningful to the recipient who needs to see the location.
-                  if (isSent) {
-                    return (
-                      <View
-                        key={msg.id}
-                        style={[styles.bubbleRow, styles.bubbleRowSent]}
-                      >
-                        <View style={styles.bubbleCol}>
-                          <View style={styles.locSentPill}>
-                            <MaterialIcons
-                              name="my-location"
-                              size={13}
-                              color="#f27f0d"
-                            />
-                            <Text style={styles.locSentPillText}>
-                              Location sent
-                            </Text>
-                            {hasCoords && (
-                              <Text style={styles.locSentPillCoords}>
-                                {`${fmtCoord(msg.lat, 4)}, ${fmtCoord(msg.lng, 4)}`}
-                              </Text>
-                            )}
-                          </View>
-                          <View
-                            style={[styles.bubbleMeta, styles.bubbleMetaSent]}
-                          >
-                            <Text style={styles.timeText}>
-                              {formatTime(msg.timestamp)}
-                            </Text>
-                            {msg.deliveryStatus && (
-                              <MaterialIcons
-                                name={
-                                  msg.deliveryStatus === "delivered"
-                                    ? "done-all"
-                                    : "done"
-                                }
-                                size={13}
-                                color={
-                                  msg.deliveryStatus === "delivered"
-                                    ? "#0ea5e9"
-                                    : "#a09080"
-                                }
-                              />
-                            )}
-                          </View>
-                        </View>
-                      </View>
-                    );
-                  }
-
-                  // Received pings: always render the MapView when coords are
-                  // present — MapLibre renders whatever tiles it has (online or
-                  // offline). Never block on offlineMap.status so the spinner
-                  // never gets stuck (OfflineManager can hang on iOS).
-                  // A non-blocking overlay hints the user to download tiles if
-                  // no offline pack is confirmed yet.
-                  const noOfflinePack =
-                    offlineMap.status === "idle" ||
-                    offlineMap.status === "error";
-                  return (
-                    <View
-                      key={msg.id}
-                      style={[styles.bubbleRow, styles.bubbleRowReceived]}
-                    >
-                      <View style={styles.avatar}>
-                        <MaterialIcons
-                          name="cell-tower"
-                          size={14}
-                          color="#fff"
-                        />
-                      </View>
-                      <View
-                        style={[styles.bubbleCol, styles.bubbleColReceived]}
-                      >
-                        <View style={[styles.mapCard, styles.mapCardReceived]}>
-                          {!coord ? (
-                            <View style={styles.mapThumbFallback}>
-                              <MaterialIcons
-                                name="location-off"
-                                size={28}
-                                color="#a09080"
-                              />
-                              <Text style={styles.mapThumbFallbackText}>
-                                No coordinates
-                              </Text>
-                            </View>
-                          ) : (
-                            <Pressable
-                              style={styles.mapThumb}
-                              onPress={() => {
-                                setExpandedCoord(coord);
-                                setExpandedLabel(
-                                  `${fmtCoord(msg.lat, 5)}, ${fmtCoord(msg.lng, 5)}`,
-                                );
-                                setExpandedZoom(13);
-                              }}
-                            >
-                              <View
-                                style={StyleSheet.absoluteFillObject}
-                                pointerEvents="none"
-                              >
-                                <MapView
-                                  style={StyleSheet.absoluteFillObject}
-                                  mapStyle={OFFLINE_STYLE_URL}
-                                  logoEnabled={false}
-                                  attributionEnabled={false}
-                                  compassEnabled={false}
-                                  scrollEnabled={false}
-                                  zoomEnabled={false}
-                                  rotateEnabled={false}
-                                  pitchEnabled={false}
-                                >
-                                  <Camera
-                                    defaultSettings={{
-                                      centerCoordinate: coord,
-                                      zoomLevel: 13,
-                                    }}
-                                    animationMode="none"
-                                  />
-                                  <PointAnnotation
-                                    id={`pin-${msg.id}`}
-                                    coordinate={coord}
-                                  >
-                                    <View
-                                      style={[
-                                        styles.mapPinDot,
-                                        styles.mapPinDotReceived,
-                                      ]}
-                                    />
-                                  </PointAnnotation>
-                                </MapView>
-                              </View>
-                              {/* Hint overlay when no offline pack is available */}
-                              {noOfflinePack && (
-                                <Pressable
-                                  style={styles.mapNoOfflineOverlay}
-                                  onPress={() => router.push("/(tabs)/map")}
-                                >
-                                  <MaterialIcons
-                                    name="download-for-offline"
-                                    size={13}
-                                    color="#fff"
-                                  />
-                                  <Text style={styles.mapNoOfflineOverlayText}>
-                                    No offline map · tap to download
-                                  </Text>
-                                </Pressable>
-                              )}
-                              <View style={styles.mapExpandOverlay}>
-                                <MaterialIcons
-                                  name="open-in-full"
-                                  size={14}
-                                  color="#fff"
-                                />
-                                <Text style={styles.mapExpandOverlayText}>
-                                  Tap to expand
-                                </Text>
-                              </View>
-                            </Pressable>
-                          )}
-                          <View style={styles.mapCardFooter}>
-                            <MaterialIcons
-                              name="my-location"
-                              size={13}
-                              color="#0ea5e9"
-                            />
-                            <Text
-                              style={[
-                                styles.mapCardLabel,
-                                { color: "#0ea5e9" },
-                              ]}
-                            >
-                              Location Update
-                            </Text>
-                            {coord && (
-                              <Text style={styles.mapCardCoords}>
-                                {`${fmtCoord(msg.lat, 5)}, ${fmtCoord(msg.lng, 5)}`}
-                              </Text>
-                            )}
-                          </View>
-                        </View>
-                        <View
-                          style={[styles.bubbleMeta, styles.bubbleMetaReceived]}
-                        >
-                          <Text style={styles.timeText}>
-                            {formatTime(msg.timestamp)}
-                          </Text>
-                        </View>
-                      </View>
-                    </View>
-                  );
-                }
-
                 return (
                   <View
                     key={msg.id}
@@ -795,13 +241,10 @@ export default function ChatThreadScreen() {
                   >
                     {!isSent && (
                       <View style={styles.avatar}>
-                        <MaterialIcons
-                          name="cell-tower"
-                          size={14}
-                          color="#fff"
-                        />
+                        <MaterialIcons name="person" size={14} color="#fff" />
                       </View>
                     )}
+
                     <View
                       style={[
                         styles.bubbleCol,
@@ -827,6 +270,7 @@ export default function ChatThreadScreen() {
                           {msg.text}
                         </Text>
                       </View>
+
                       <View
                         style={[
                           styles.bubbleMeta,
@@ -851,10 +295,7 @@ export default function ChatThreadScreen() {
                             )}
                           </View>
                         )}
-                        <Text style={styles.timeText}>
-                          {formatTime(msg.timestamp)}
-                        </Text>
-                        {isSent && msg.deliveryStatus && (
+                        {msg.mid && (
                           <MaterialIcons
                             name={
                               msg.deliveryStatus === "delivered"
@@ -864,11 +305,14 @@ export default function ChatThreadScreen() {
                             size={13}
                             color={
                               msg.deliveryStatus === "delivered"
-                                ? "#0ea5e9"
+                                ? "#f27f0d"
                                 : "#a09080"
                             }
                           />
                         )}
+                        <Text style={styles.timeText}>
+                          {formatTime(msg.timestamp)}
+                        </Text>
                       </View>
                     </View>
                   </View>
@@ -876,23 +320,17 @@ export default function ChatThreadScreen() {
               })}
             </ScrollView>
 
-            {/* ── Compose panel ── */}
+            {/* ── Compose ── */}
             <View style={styles.compose}>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                style={styles.composeOptionsScroll}
-                contentContainerStyle={styles.composeOptions}
-                keyboardShouldPersistTaps="handled"
-              >
-                {/* GPS pill */}
+              {/* GPS pill */}
+              <View style={styles.composeOptions}>
                 <Pressable
                   style={[styles.gpsPill, attachGps && styles.gpsPillActive]}
                   onPress={() => setAttachGps((v) => !v)}
                 >
                   <MaterialIcons
                     name="location-on"
-                    size={14}
+                    size={13}
                     color={attachGps ? "#f27f0d" : "#8a7560"}
                   />
                   <Text
@@ -900,250 +338,46 @@ export default function ChatThreadScreen() {
                       styles.gpsPillText,
                       attachGps && styles.gpsPillTextActive,
                     ]}
+                    numberOfLines={1}
                   >
                     {attachGps
                       ? gps.status === "ready"
                         ? `${gps.coords.latitude.toFixed(4)}, ${gps.coords.longitude.toFixed(4)}`
-                        : gps.status === "denied"
-                          ? "GPS denied"
-                          : gps.status === "error"
-                            ? "GPS error"
-                            : "Acquiring…"
-                      : "GPS off"}
+                        : "Acquiring…"
+                      : "GPS Off"}
                   </Text>
                 </Pressable>
+              </View>
 
-                {/* Location-tracking toggle — two independent roles */}
-                <Pressable
-                  style={[
-                    styles.trackPill,
-                    trackingActive && styles.trackPillActive,
-                    consentState === "requesting" && styles.trackPillRequesting,
-                    consentState === "granted" && styles.trackPillGranted,
-                    consentState === "denied" && styles.trackPillDenied,
-                  ]}
-                  onPress={() => {
-                    if (trackingActive) {
-                      // I am the sharer — stop sending pings
-                      handleStopSharing();
-                    } else if (consentState === "granted") {
-                      // I am the tracker — revoke (ask peer to stop sending)
-                      handleRevokeTracking();
-                    } else {
-                      // idle or denied — (re-)request peer to share their location
-                      setConsentState("idle");
-                      handleRequestTrack();
-                    }
-                  }}
-                >
-                  <MaterialIcons
-                    name={
-                      trackingActive
-                        ? "my-location"
-                        : consentState === "granted"
-                          ? "location-on"
-                          : consentState === "requesting"
-                            ? "pending"
-                            : consentState === "denied"
-                              ? "block"
-                              : "location-searching"
-                    }
-                    size={14}
-                    color={
-                      trackingActive
-                        ? "#0ea5e9"
-                        : consentState === "granted"
-                          ? "#16a34a"
-                          : consentState === "requesting"
-                            ? "#92400e"
-                            : consentState === "denied"
-                              ? "#991b1b"
-                              : "#8a7560"
-                    }
-                  />
-                  <Text
-                    style={[
-                      styles.trackPillText,
-                      trackingActive && styles.trackPillTextActive,
-                      consentState === "granted" && styles.trackPillTextGranted,
-                      consentState === "requesting" &&
-                        styles.trackPillTextRequesting,
-                      consentState === "denied" && styles.trackPillTextDenied,
-                    ]}
-                  >
-                    {trackingActive
-                      ? "Sharing location"
-                      : consentState === "granted"
-                        ? `Tracking ${contact?.name ?? peerId} · Stop`
-                        : consentState === "requesting"
-                          ? "Awaiting consent…"
-                          : consentState === "denied"
-                            ? "Declined · Retry"
-                            : "Request Track"}
-                  </Text>
-                </Pressable>
-
-                {/* ── On-demand ping button (A/requester only) ── */}
-                {consentState === "granted" && !trackingActive && (
-                  <Pressable
-                    style={[
-                      styles.pingNowBtn,
-                      requestingNow && { opacity: 0.6 },
-                    ]}
-                    onPress={handleRequestNow}
-                    disabled={requestingNow}
-                  >
-                    {requestingNow ? (
-                      <ActivityIndicator size="small" color="#0ea5e9" />
-                    ) : (
-                      <MaterialIcons name="update" size={14} color="#0ea5e9" />
-                    )}
-                    <Text style={styles.pingNowBtnText}>
-                      {requestingNow ? "Waiting…" : "Ping Now"}
-                    </Text>
-                  </Pressable>
-                )}
-              </ScrollView>
-
+              {/* Input row */}
               <View style={styles.inputRow}>
                 <TextInput
+                  style={styles.input}
                   value={message}
-                  onChangeText={(v) => setMessage(v.replace(/\n/g, " "))}
-                  placeholder={`Message ${contact?.name ?? peerId}…`}
+                  onChangeText={setMessage}
+                  placeholder="Message…"
                   placeholderTextColor="#8a7560"
                   multiline
                   maxLength={180}
-                  textAlignVertical="top"
-                  style={styles.input}
+                  returnKeyType="default"
                 />
                 <Pressable
-                  style={[styles.sendBtn, sending && { opacity: 0.6 }]}
+                  style={styles.sendBtn}
                   onPress={handleSend}
-                  disabled={sending}
+                  disabled={sending || !message.trim()}
                 >
                   {sending ? (
-                    <ActivityIndicator color="#fff" size="small" />
+                    <ActivityIndicator size={20} color="#fff" />
                   ) : (
-                    <MaterialIcons name="send" size={22} color="#fff" />
+                    <MaterialIcons name="send" size={20} color="#fff" />
                   )}
                 </Pressable>
               </View>
-              <Text
-                style={[
-                  styles.charCounter,
-                  message.length >= 180 && { color: "#d32f2f" },
-                ]}
-              >
-                {message.length}/180
-              </Text>
+              <Text style={styles.charCounter}>{message.length}/180</Text>
             </View>
           </View>
         </KeyboardAvoidingView>
       </SafeAreaView>
-
-      {/* ── Expanded Map Modal ── */}
-      <Modal
-        visible={!!expandedCoord}
-        animationType="fade"
-        statusBarTranslucent
-        onRequestClose={() => setExpandedCoord(null)}
-      >
-        <View style={styles.mapFullScreen}>
-          {expandedCoord && (
-            <MapView
-              style={StyleSheet.absoluteFillObject}
-              mapStyle={OFFLINE_STYLE_URL}
-              logoEnabled={false}
-              attributionEnabled={false}
-              compassEnabled={true}
-              compassViewPosition={1}
-              scrollEnabled={true}
-              zoomEnabled={true}
-              rotateEnabled={true}
-              pitchEnabled={true}
-            >
-              <Camera
-                ref={expandedCamRef}
-                defaultSettings={{
-                  centerCoordinate: expandedCoord,
-                  zoomLevel: expandedZoom,
-                }}
-                animationMode="none"
-              />
-              <PointAnnotation id="expanded-pin" coordinate={expandedCoord}>
-                <View
-                  style={[
-                    styles.mapPinDot,
-                    styles.mapPinDotReceived,
-                    styles.mapPinDotLarge,
-                  ]}
-                />
-              </PointAnnotation>
-            </MapView>
-          )}
-
-          {/* Close button */}
-          <Pressable
-            style={[styles.mapFullCloseBtn, { top: insets.top + 12 }]}
-            onPress={() => setExpandedCoord(null)}
-          >
-            <MaterialIcons name="close" size={22} color="#fff" />
-          </Pressable>
-
-          {/* Zoom controls */}
-          <View style={[styles.mapFullZoomControls, { top: insets.top + 72 }]}>
-            <Pressable
-              style={styles.mapFullZoomBtn}
-              onPress={() => {
-                const next = expandedZoom + 1;
-                setExpandedZoom(next);
-                expandedCamRef.current?.setCamera({
-                  zoomLevel: next,
-                  animationDuration: 250,
-                });
-              }}
-            >
-              <MaterialIcons name="add" size={20} color="#181411" />
-            </Pressable>
-            <View style={styles.mapFullZoomDivider} />
-            <Pressable
-              style={styles.mapFullZoomBtn}
-              onPress={() => {
-                const next = Math.max(1, expandedZoom - 1);
-                setExpandedZoom(next);
-                expandedCamRef.current?.setCamera({
-                  zoomLevel: next,
-                  animationDuration: 250,
-                });
-              }}
-            >
-              <MaterialIcons name="remove" size={20} color="#181411" />
-            </Pressable>
-          </View>
-
-          {/* Re-centre button */}
-          <Pressable
-            style={[styles.mapFullRecentreBtn, { bottom: insets.bottom + 80 }]}
-            onPress={() =>
-              expandedCamRef.current?.setCamera({
-                centerCoordinate: expandedCoord ?? undefined,
-                zoomLevel: 13,
-                animationDuration: 400,
-              })
-            }
-          >
-            <MaterialIcons name="my-location" size={20} color="#0ea5e9" />
-          </Pressable>
-
-          {/* Coordinate strip */}
-          <View
-            style={[styles.mapFullCoordBar, { bottom: insets.bottom + 16 }]}
-          >
-            <MaterialIcons name="location-on" size={14} color="#0ea5e9" />
-            <Text style={styles.mapFullCoordText}>{expandedLabel}</Text>
-          </View>
-        </View>
-      </Modal>
 
       {/* ── Address Book Modal ── */}
       <Modal
@@ -1343,84 +577,6 @@ const styles = StyleSheet.create({
   },
   abBtn: { padding: 8 },
 
-  // Tracking banner
-  trackingBanner: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    backgroundColor: "#0ea5e9",
-  },
-  trackingBannerText: {
-    flex: 1,
-    fontSize: 12,
-    fontWeight: "700",
-    color: "#fff",
-  },
-  trackingStop: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: "rgba(255,255,255,0.25)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  // Incoming tracking consent request banner (amber)
-  consentBanner: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    backgroundColor: "#fef3c7",
-    borderBottomWidth: 1,
-    borderBottomColor: "#fde68a",
-  },
-  consentBannerText: {
-    flex: 1,
-    fontSize: 12,
-    fontWeight: "600",
-    color: "#92400e",
-    lineHeight: 16,
-  },
-  consentDeclineBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "#fca5a5",
-    backgroundColor: "#fee2e2",
-  },
-  consentDeclineBtnText: { fontSize: 12, fontWeight: "700", color: "#991b1b" },
-  consentAcceptBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-    backgroundColor: "#16a34a",
-  },
-  consentAcceptBtnText: { fontSize: 12, fontWeight: "700", color: "#fff" },
-
-  // Consent system message bubbles in chat history
-  systemRow: { alignItems: "center", paddingVertical: 4 },
-  consentCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 12,
-    borderWidth: 1,
-    maxWidth: "85%",
-  },
-  consentCardReq: { backgroundColor: "#fef3c7", borderColor: "#fde68a" },
-  consentCardOk: { backgroundColor: "#dcfce7", borderColor: "#bbf7d0" },
-  consentCardNo: { backgroundColor: "#fee2e2", borderColor: "#fecaca" },
-  consentCardLocReq: { backgroundColor: "#e0f2fe", borderColor: "#bae6fd" },
-  consentCardText: { flex: 1, fontSize: 12, fontWeight: "600" },
-  consentCardTime: { fontSize: 10, color: "#a09080", fontWeight: "500" },
-
   // History list
   list: {
     paddingHorizontal: 12,
@@ -1465,123 +621,6 @@ const styles = StyleSheet.create({
   bubbleMetaReceived: { justifyContent: "flex-start" },
   timeText: { color: "#a09080", fontSize: 11, fontWeight: "500" },
 
-  // Location map thumbnail
-  mapCard: {
-    width: 240,
-    borderRadius: 14,
-    overflow: "hidden",
-    borderWidth: 1,
-  },
-  mapCardSent: {
-    borderColor: "#f27f0d33",
-    borderBottomRightRadius: 4,
-  },
-  mapCardReceived: {
-    borderColor: "#0ea5e933",
-    borderBottomLeftRadius: 4,
-  },
-  mapThumb: {
-    width: 240,
-    height: 160,
-    backgroundColor: "#e8e0d8",
-  },
-  mapThumbFallback: {
-    width: 240,
-    height: 160,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#f5f1ec",
-    gap: 6,
-  },
-  mapThumbFallbackText: {
-    fontSize: 12,
-    color: "#8a7560",
-  },
-  mapCardFooter: {
-    flexDirection: "row",
-    alignItems: "center",
-    flexWrap: "wrap",
-    gap: 5,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    backgroundColor: "#fff",
-  },
-  mapCardLabel: {
-    fontSize: 12,
-    fontWeight: "700",
-    flex: 1,
-  },
-  mapCardCoords: {
-    fontSize: 10,
-    color: "#8a7560",
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-    width: "100%" as const,
-  },
-  mapPinDot: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    borderWidth: 2.5,
-    borderColor: "#fff",
-  },
-  mapPinDotSent: { backgroundColor: "#f27f0d" },
-  mapPinDotReceived: { backgroundColor: "#0ea5e9" },
-  mapDownloadPrompt: {
-    width: 240,
-    height: 160,
-    alignItems: "center" as const,
-    justifyContent: "center" as const,
-    backgroundColor: "#e8f4fd",
-    paddingHorizontal: 16,
-    gap: 5,
-  },
-  mapDownloadPromptTitle: {
-    fontSize: 13,
-    fontWeight: "700" as const,
-    color: "#0369a1",
-    textAlign: "center" as const,
-  },
-  mapDownloadPromptBody: {
-    fontSize: 11,
-    color: "#6b7280",
-    textAlign: "center" as const,
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-  },
-  mapDownloadPromptBtn: {
-    marginTop: 6,
-    backgroundColor: "#0ea5e9",
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  mapDownloadPromptBtnText: {
-    fontSize: 12,
-    fontWeight: "700" as const,
-    color: "#fff",
-  },
-  locSentPill: {
-    flexDirection: "row" as const,
-    alignItems: "center" as const,
-    flexWrap: "wrap" as const,
-    gap: 4,
-    backgroundColor: "#fff5e6",
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderWidth: 1,
-    borderColor: "#f27f0d33",
-  },
-  locSentPillText: {
-    fontSize: 13,
-    fontWeight: "600" as const,
-    color: "#f27f0d",
-  },
-  locSentPillCoords: {
-    fontSize: 10,
-    color: "#8a7560",
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-    width: "100%" as const,
-  },
   locationPill: {
     flexDirection: "row",
     alignItems: "center",
@@ -1614,9 +653,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     paddingVertical: 2,
-    gap: 0,
   },
-  composeOptionsScroll: { flexGrow: 0 },
   gpsPill: {
     flexDirection: "row",
     alignItems: "center",
@@ -1633,55 +670,9 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: "#8a7560",
     fontWeight: "600",
-    maxWidth: 130,
+    maxWidth: 200,
   },
   gpsPillTextActive: { color: "#f27f0d" },
-  trackPill: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: "#e6e0db",
-    backgroundColor: "#f8f7f5",
-    marginLeft: 8,
-  },
-  trackPillActive: { borderColor: "#0ea5e933", backgroundColor: "#0ea5e90d" },
-  trackPillRequesting: {
-    borderColor: "#92400e33",
-    backgroundColor: "#fef3c70d",
-  },
-  trackPillDenied: { borderColor: "#991b1b33", backgroundColor: "#fee2e20d" },
-  trackPillGranted: { borderColor: "#16a34a33", backgroundColor: "#dcfce70d" },
-  trackPillText: {
-    fontSize: 12,
-    color: "#8a7560",
-    fontWeight: "600",
-    maxWidth: 160,
-  },
-  trackPillTextActive: { color: "#0ea5e9" },
-  trackPillTextRequesting: { color: "#92400e" },
-  trackPillTextDenied: { color: "#991b1b" },
-  trackPillTextGranted: { color: "#16a34a" },
-  pingNowBtn: {
-    flexDirection: "row" as const,
-    alignItems: "center" as const,
-    gap: 4,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: "#0ea5e933",
-    backgroundColor: "#0ea5e90d",
-    marginLeft: 6,
-  },
-  pingNowBtnText: {
-    fontSize: 12,
-    fontWeight: "600" as const,
-    color: "#0ea5e9",
-  },
   inputRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   input: {
     flex: 1,
@@ -1865,120 +856,5 @@ const styles = StyleSheet.create({
     borderColor: "#fecaca",
     alignItems: "center",
     justifyContent: "center",
-  },
-  // ── Expanded map modal ────────────────────────────────────────────────────
-  mapFullScreen: {
-    flex: 1,
-    backgroundColor: "#000",
-  },
-  mapFullCloseBtn: {
-    position: "absolute" as const,
-    left: 16,
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: "rgba(0,0,0,0.55)",
-    alignItems: "center" as const,
-    justifyContent: "center" as const,
-  },
-  mapFullZoomControls: {
-    position: "absolute" as const,
-    right: 16,
-    backgroundColor: "#fff",
-    borderRadius: 12,
-    overflow: "hidden" as const,
-    elevation: 4,
-    shadowColor: "#000",
-    shadowOpacity: 0.18,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 },
-  },
-  mapFullZoomBtn: {
-    width: 44,
-    height: 44,
-    alignItems: "center" as const,
-    justifyContent: "center" as const,
-  },
-  mapFullZoomDivider: {
-    height: 1,
-    backgroundColor: "#e6e0db",
-    marginHorizontal: 8,
-  },
-  mapFullRecentreBtn: {
-    position: "absolute" as const,
-    right: 16,
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: "#fff",
-    alignItems: "center" as const,
-    justifyContent: "center" as const,
-    elevation: 4,
-    shadowColor: "#000",
-    shadowOpacity: 0.18,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 },
-  },
-  mapFullCoordBar: {
-    position: "absolute" as const,
-    left: 16,
-    right: 16,
-    flexDirection: "row" as const,
-    alignItems: "center" as const,
-    gap: 6,
-    backgroundColor: "rgba(0,0,0,0.6)",
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 12,
-  },
-  mapFullCoordText: {
-    flex: 1,
-    fontSize: 12,
-    fontWeight: "600" as const,
-    color: "#fff",
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-  },
-  // ── Thumbnail expand overlay ──────────────────────────────────────────────
-  mapExpandOverlay: {
-    position: "absolute" as const,
-    bottom: 8,
-    right: 8,
-    flexDirection: "row" as const,
-    alignItems: "center" as const,
-    gap: 4,
-    backgroundColor: "rgba(0,0,0,0.45)",
-    paddingHorizontal: 7,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  mapExpandOverlayText: {
-    fontSize: 11,
-    color: "#fff",
-    fontWeight: "600" as const,
-  },
-  mapNoOfflineOverlay: {
-    position: "absolute" as const,
-    top: 8,
-    left: 8,
-    right: 8,
-    flexDirection: "row" as const,
-    alignItems: "center" as const,
-    gap: 5,
-    backgroundColor: "rgba(0,0,0,0.52)",
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    borderRadius: 8,
-  },
-  mapNoOfflineOverlayText: {
-    flex: 1,
-    fontSize: 10,
-    color: "#fff",
-    fontWeight: "600" as const,
-  },
-  mapPinDotLarge: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    borderWidth: 3,
   },
 });

@@ -32,10 +32,6 @@ function formatInboxTime(ts: number | undefined): string {
 
 function previewText(text: string | undefined): string {
   if (!text) return "";
-  if (text === "[LOC]") return "📍 Location update";
-  if (text === "[TRACK_REQ]") return "📡 Tracking request sent";
-  if (text === "[TRACK_OK]") return "✅ Location tracking accepted";
-  if (text === "[TRACK_NO]") return "🚫 Location tracking declined";
   return text.length > 50 ? text.slice(0, 50) + "…" : text;
 }
 

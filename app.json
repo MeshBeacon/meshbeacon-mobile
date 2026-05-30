@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "ClusterDuck",
+    "name": "Taqi Rescue",
     "slug": "ClusterDuck",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -30,6 +30,7 @@
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.BLUETOOTH",
         "android.permission.BLUETOOTH_ADMIN",
+        "android.permission.BLUETOOTH_SCAN",
         "android.permission.BLUETOOTH_CONNECT",
         "android.permission.POST_NOTIFICATIONS",
         "android.permission.RECEIVE_BOOT_COMPLETED",
@@ -44,7 +45,6 @@
       "./plugins/withUsbSerial",
       "expo-notifications",
       "expo-router",
-      "@maplibre/maplibre-react-native",
       [
         "expo-splash-screen",
         {
@@ -67,9 +67,7 @@
         "react-native-ble-plx",
         {
           "isBackgroundEnabled": false,
-          "modes": [
-            "central"
-          ],
+          "modes": ["central"],
           "bluetoothAlwaysPermission": "ClusterDuck needs Bluetooth to connect to the ESP32 emergency radio device."
         }
       ]

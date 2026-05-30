@@ -3,7 +3,6 @@ import { useRouter } from "expo-router";
 import { useState } from "react";
 import {
     ActivityIndicator,
-    Image,
     Pressable,
     ScrollView,
     StyleSheet,
@@ -85,7 +84,8 @@ export default function NewMessageScreen() {
         "success",
       );
       setUrgency("Low Urgency");
-      router.back();
+      setMessage("");
+      setAttachGps(true);
     } catch (err) {
       showToast((err as Error).message, "error");
     } finally {
@@ -112,18 +112,6 @@ export default function NewMessageScreen() {
           contentContainerStyle={styles.content}
           showsVerticalScrollIndicator={false}
         >
-          <View style={styles.mapCard}>
-            <Image
-              source={{
-                uri: "https://lh3.googleusercontent.com/aida-public/AB6AXuAtWaUFxhcIojBuIjuH0CKWfmHHgvbrhIpgphWlPGCS8kRuGuSgmRSt5OqRFNVUg_k5xqNyb8SaopVHtKldlqqV2RqlacKP00Acq7Cua4ctL08VwOgcYITrJAfxzhJ0DZoOqZVLeGnbGqaba8errLQ4lZ-YUmyNfxEsr4R2mmhPvHZ4ceT39MFC8wRByOKvmgcyvEmfay3C4qt4cP3zE2005Ca2qtqQ8_HMMV5WTcL0M9W3J9ljXk3jNrYTmvk1YnXptWqZXBvrTrVs",
-              }}
-              style={styles.mapImage}
-            />
-            <View style={styles.locationPin}>
-              <MaterialIcons name="location-on" size={20} color="#fff" />
-            </View>
-          </View>
-
           <View style={styles.fieldGroup}>
             <Text style={styles.fieldLabel}>Message</Text>
             <TextInput
@@ -268,29 +256,6 @@ const styles = StyleSheet.create({
     gap: 20,
     paddingHorizontal: 16,
     paddingVertical: 16,
-  },
-  mapCard: {
-    height: 130,
-    borderRadius: 12,
-    overflow: "hidden",
-    borderWidth: 1,
-    borderColor: "#e6e0db",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  mapImage: {
-    width: "100%",
-    height: "100%",
-    opacity: 0.8,
-  },
-  locationPin: {
-    position: "absolute",
-    width: 36,
-    height: 36,
-    borderRadius: 999,
-    backgroundColor: "#f27f0d",
-    alignItems: "center",
-    justifyContent: "center",
   },
   fieldGroup: {
     gap: 8,

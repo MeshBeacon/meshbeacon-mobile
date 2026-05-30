@@ -31,7 +31,7 @@ import type {
     MTalkFrame,
     StatusFrame,
 } from "@/services/transport";
-import { useEffect, useReducer } from "react";
+import { useEffect, useReducer, useRef } from "react";
 
 export interface Esp32Data {
   /** Battery level 0-100, or null if not yet received. */
@@ -156,6 +156,12 @@ export function useEsp32Data(): Esp32Data {
     }
   }, [status]);
 
+  // Short-lived cache to deduplicate MTALK frames that arrive multiple times
+  // when co-located MamaDucks relay the same LoRa packet to the connected duck.
+  // Key: MID (if present) or "<from>:<text>". Value: timestamp of first receipt.
+  const mtalkSeen = useRef<Map<string, number>>(new Map());
+  const MTALK_DEDUP_MS = 5_000;
+
   useEffect(() => {
     // Re-subscribe whenever the user switches transport mode (USB ↔ BLE)
     return serviceForMode(transportMode).onFrameReceived((frame) => {
@@ -172,14 +178,26 @@ export function useEsp32Data(): Esp32Data {
       }
       if (frame.type === "MTALK") {
         const talk = frame as MTalkFrame;
-        // Use the sender duck ID from the FROM= field set by MamaDuck firmware.
-        // Fall back to "INCOMING" so no message is ever silently lost.
+        // Deduplicate relay copies: co-located MamaDucks relay the same LoRa
+        // packet, causing the connected duck to receive it more than once.
         const peerId = talk.from ?? "INCOMING";
-        const coords =
-          talk.lat && talk.lng ? { lat: talk.lat, lng: talk.lng } : undefined;
-        addChatReceived(peerId, talk.text, coords);
-        incrementUnread(peerId);
-        notifyDirectMessage(peerId, talk.text);
+        const dedupKey = talk.mid
+          ? `mid:${talk.mid}`
+          : `${peerId}:${talk.text}`;
+        const now = Date.now();
+        const lastSeen = mtalkSeen.current.get(dedupKey);
+        if (!lastSeen || now - lastSeen >= MTALK_DEDUP_MS) {
+          mtalkSeen.current.set(dedupKey, now);
+          // Evict expired entries to prevent unbounded growth.
+          for (const [k, t] of mtalkSeen.current.entries()) {
+            if (now - t > MTALK_DEDUP_MS * 2) mtalkSeen.current.delete(k);
+          }
+          const coords =
+            talk.lat && talk.lng ? { lat: talk.lat, lng: talk.lng } : undefined;
+          addChatReceived(peerId, talk.text, coords);
+          incrementUnread(peerId);
+          notifyDirectMessage(peerId, talk.text);
+        }
       }
       if (frame.type === "MACK") {
         // Delivery receipt — mark the corresponding sent message as delivered

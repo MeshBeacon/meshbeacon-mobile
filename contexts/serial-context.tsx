@@ -35,6 +35,7 @@ interface SerialContextValue {
     targetId: string,
     text: string,
     location?: { latitude: number; longitude: number },
+    mid?: string,
   ) => Promise<void>;
 }
 
@@ -106,7 +107,8 @@ export function SerialProvider({ children }: { children: React.ReactNode }) {
       targetId: string,
       text: string,
       location?: { latitude: number; longitude: number },
-    ) => serviceForMode(mode).sendMTalk(targetId, text, location),
+      mid?: string,
+    ) => serviceForMode(mode).sendMTalk(targetId, text, location, mid),
     [mode],
   );
 

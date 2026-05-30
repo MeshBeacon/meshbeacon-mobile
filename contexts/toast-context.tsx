@@ -7,22 +7,22 @@
  */
 
 import React, {
-    createContext,
-    useCallback,
-    useContext,
-    useEffect,
-    useRef,
-    useState,
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
 } from "react";
 import {
-    Animated,
-    Keyboard,
-    Modal,
-    Platform,
-    Pressable,
-    StyleSheet,
-    Text,
-    View,
+  Animated,
+  Keyboard,
+  Modal,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -94,7 +94,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
       subShow.remove();
       subHide.remove();
     };
-  }, [])
+  }, []);
 
   // ── Toast ──────────────────────────────────────────────────────────────────
 

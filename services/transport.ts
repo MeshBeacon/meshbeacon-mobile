@@ -124,12 +124,25 @@ export function parseIncomingLine(line: string): IncomingFrame | null {
   const type = commaIdx === -1 ? body : body.slice(0, commaIdx);
   const rest = commaIdx === -1 ? "" : body.slice(commaIdx + 1);
 
-  // Parse remaining "k:v" pairs into a plain object
+  // Parse remaining "k:v" pairs into a plain object.
+  // Values may contain commas (e.g. free-text messages), so we cannot simply
+  // split on ",".  Instead, locate every key boundary — an ALL-CAPS identifier
+  // preceded by "," or the start of the string — and treat everything between
+  // one key's value-start and the next key's boundary as that key's value.
   const fields: Record<string, string> = {};
-  for (const pair of rest.split(",")) {
-    const colon = pair.indexOf(":");
-    if (colon === -1) continue;
-    fields[pair.slice(0, colon).trim()] = pair.slice(colon + 1).trim();
+  const kvRe = /(^|,)([A-Z0-9_]+):/g;
+  const kvEntries: Array<{ key: string; valueStart: number; matchStart: number }> = [];
+  let kvMatch: RegExpExecArray | null;
+  while ((kvMatch = kvRe.exec(rest)) !== null) {
+    kvEntries.push({
+      key: kvMatch[2],
+      valueStart: kvMatch.index + kvMatch[0].length,
+      matchStart: kvMatch.index,
+    });
+  }
+  for (let i = 0; i < kvEntries.length; i++) {
+    const end = i + 1 < kvEntries.length ? kvEntries[i + 1].matchStart : rest.length;
+    fields[kvEntries[i].key] = rest.slice(kvEntries[i].valueStart, end).trim();
   }
 
   switch (type) {
@@ -147,6 +160,7 @@ export function parseIncomingLine(line: string): IncomingFrame | null {
     case "ERR":
       return { type: "ERR", message: fields["MSG"] ?? rest };
     case "MSG":
+    case "PMSG": // topic 25 — personal message; same shape as MSG
       return {
         type: "MSG",
         text: fields["TEXT"] ?? rest,

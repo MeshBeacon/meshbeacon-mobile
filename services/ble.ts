@@ -24,7 +24,7 @@ const NUS_SERVICE = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
 const NUS_RX_CHAR = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"; // phone writes here
 const NUS_TX_CHAR = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"; // ESP32 sends here
 
-const SCAN_TIMEOUT_MS = 15_000;
+const SCAN_TIMEOUT_MS = 30_000;
 const FRAME_SOURCE = "CDK";
 
 /**
@@ -34,6 +34,11 @@ const FRAME_SOURCE = "CDK";
  */
 function isClusterDuckDevice(name: string): boolean {
   const upper = name.toUpperCase();
+  // ClusterDuck Protocol enforces DUCK_NAME = exactly 8 bytes
+  // (e.g. "MAMADUCK", "MNZAIHAN", "NRLIZAMD", "ZAIHAN12").
+  // Strictly reject anything not 8 uppercase alphanumeric characters.
+  if (/^[A-Z0-9]{8}$/.test(upper)) return true;
+  // Also keep legacy/longer prefixes for development builds.
   return (
     upper.includes("DUCK") ||
     upper.includes("MAMA") ||
@@ -200,6 +205,10 @@ class BleService implements ITransport {
 
   async connect(targetDeviceId?: string): Promise<boolean> {
     try {
+      // 0. Stop any in-progress scan immediately — Android GATT stack rejects
+      //    connection attempts while a scan is still active on some chipsets.
+      this.getManager().stopDeviceScan();
+
       // 1. Android runtime permissions
       if (Platform.OS === "android") {
         const granted = await requestAndroidBlePermissions();
@@ -226,9 +235,16 @@ class BleService implements ITransport {
       let connectedDevice: Device;
       if (targetDeviceId) {
         this.setStatus("connecting");
+        // On Android, a short pause after stopping the scan lets the BLE stack
+        // fully release the scanner before opening a GATT connection.
+        // Without this, many Android chipsets return GATT error 133
+        // ("device not found") even though we just saw the device advertising.
+        if (Platform.OS === "android") {
+          await new Promise<void>((r) => setTimeout(r, 300));
+        }
         connectedDevice = await this.getManager().connectToDevice(
           targetDeviceId,
-          { autoConnect: false },
+          { autoConnect: false, timeout: 10_000 },
         );
       } else {
         this.setStatus("scanning");
@@ -415,33 +431,92 @@ class BleService implements ITransport {
    * Scan for nearby ClusterDuck devices advertising NUS.
    * Calls onFound for each new device discovered.
    * Returns a stop function — call it to end the scan early.
+   *
+   * Pass timeoutMs > 0 to auto-stop after that duration; omit (or pass 0) for
+   * a continuous scan that runs until the returned stop() is called.
    */
   scanDevices(
     onFound: (d: ScannedDevice) => void,
-    timeoutMs = SCAN_TIMEOUT_MS,
+    timeoutMs = 0,
+    onComplete?: () => void,
   ): () => void {
+    // Two-phase confirmation:
+    //  1. A device enters `candidates` when its name matches the 8-char CDP rule
+    //     (primary advertising packet — always the first event received).
+    //  2. It is confirmed immediately when its serviceUUIDs contains the NUS UUID
+    //     (scan response — arrives on a subsequent allowDuplicates event).
+    //  3. Each candidate has a 3-second per-device fallback timer: if the scan
+    //     response never arrives, the device is shown anyway so no duck is missed.
+    const CANDIDATE_FLUSH_MS = 3_000;
+    const candidates = new Map<string, ScannedDevice>();
+    const candidateTimers = new Map<string, ReturnType<typeof setTimeout>>();
+    const uuidSeen = new Set<string>(); // NUS UUID confirmed but name not yet received
     const seen = new Set<string>();
     const mgr = this.getManager();
     let stopped = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
+    let globalTimer: ReturnType<typeof setTimeout> | null = null;
     let stateSub: { remove: () => void } | null = null;
+
+    const confirm = (id: string) => {
+      if (seen.has(id)) return;
+      const d = candidates.get(id);
+      if (!d) return;
+      clearTimeout(candidateTimers.get(id));
+      candidateTimers.delete(id);
+      seen.add(id);
+      onFound(d);
+    };
 
     const startScan = () => {
       if (stopped) return;
       mgr.startDeviceScan(
-        null, // no UUID filter — NimBLE puts 128-bit UUIDs in scan response, not ad packet
-        { allowDuplicates: false },
+        null, // no hardware UUID filter — buggy on some Android chipsets
+        { allowDuplicates: true },
         (err, device) => {
           if (err || !device) return;
+          if (seen.has(device.id)) return;
+
           const name = device.name ?? device.localName;
-          // Only show devices whose name looks like a ClusterDuck device
-          if (!seen.has(device.id) && name && isClusterDuckDevice(name)) {
-            seen.add(device.id);
-            onFound({ id: device.id, name, rssi: device.rssi ?? -99 });
+          const hasNUS =
+            device.serviceUUIDs?.some(
+              (u) => u.toLowerCase() === NUS_SERVICE,
+            ) ?? false;
+
+          // Remember if NUS UUID was seen before the name arrived (old firmware:
+          // name is in scan response, UUID is in primary ad — opposite order).
+          if (hasNUS) uuidSeen.add(device.id);
+
+          // Phase 1: name matches CDP 8-char rule → add to candidates.
+          if (name && isClusterDuckDevice(name) && !candidates.has(device.id)) {
+            candidates.set(device.id, {
+              id: device.id,
+              name,
+              rssi: device.rssi ?? -99,
+            });
+            if (uuidSeen.has(device.id)) {
+              // UUID already confirmed before name arrived — confirm immediately.
+              confirm(device.id);
+            } else {
+              // Fallback: show this device after 3 s even if NUS UUID never arrives.
+              candidateTimers.set(
+                device.id,
+                setTimeout(() => confirm(device.id), CANDIDATE_FLUSH_MS),
+              );
+            }
           }
+
+          // Phase 2: NUS UUID in scan response → confirm if name already known.
+          if (hasNUS) confirm(device.id);
         },
       );
-      timer = setTimeout(() => mgr.stopDeviceScan(), timeoutMs);
+      // Optional global timeout — only set when caller requests it.
+      if (timeoutMs > 0) {
+        globalTimer = setTimeout(() => {
+          mgr.stopDeviceScan();
+          for (const id of candidates.keys()) confirm(id);
+          onComplete?.();
+        }, timeoutMs);
+      }
     };
 
     // Request Android BLE/location permissions first, then wait for the
@@ -464,7 +539,10 @@ class BleService implements ITransport {
       stopped = true;
       stateSub?.remove();
       stateSub = null;
-      if (timer !== null) clearTimeout(timer);
+      if (globalTimer !== null) clearTimeout(globalTimer);
+      for (const t of candidateTimers.values()) clearTimeout(t);
+      candidateTimers.clear();
+      uuidSeen.clear();
       mgr.stopDeviceScan();
     };
   }
@@ -507,7 +585,10 @@ class BleService implements ITransport {
       const timer = setTimeout(() => finish(null), timeoutMs);
 
       this.getManager().startDeviceScan(
-        [NUS_SERVICE],
+        // No UUID filter — match by name in the callback instead.
+        // The NUS service UUID is now in the scan response (not the primary ad),
+        // so serviceUUIDs is empty on the first callback; name is reliable.
+        null,
         { allowDuplicates: false },
         (error, device) => {
           if (error) {
@@ -516,8 +597,11 @@ class BleService implements ITransport {
             return;
           }
           if (device) {
-            clearTimeout(timer);
-            finish(device);
+            const name = device.name ?? device.localName;
+            if (name && isClusterDuckDevice(name)) {
+              clearTimeout(timer);
+              finish(device);
+            }
           }
         },
       );

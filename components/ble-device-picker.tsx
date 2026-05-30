@@ -9,7 +9,7 @@ import { useSerial } from "@/contexts/serial-context";
 import type { ScannedDevice } from "@/services/ble";
 import { bleService } from "@/services/ble";
 import { MaterialIcons } from "@expo/vector-icons";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
     ActivityIndicator,
     FlatList,
@@ -35,24 +35,34 @@ export function BleScanSheet({ visible, onClose }: Props) {
   const { connectToBleDevice } = useSerial();
   const [devices, setDevices] = useState<ScannedDevice[]>([]);
   const [connecting, setConnecting] = useState<string | null>(null);
+  const [scanning, setScanning] = useState(false);
   const stopScanRef = useRef<(() => void) | null>(null);
 
-  useEffect(() => {
-    if (!visible) return;
-    setDevices([]);
-    setConnecting(null);
-
+  const startScan = useCallback(() => {
+    stopScanRef.current?.();
+    setScanning(true);
+    // No timeout — scan runs continuously until the user picks a device or
+    // closes the sheet. The stop function is called in the cleanup effect and
+    // in handleSelect.
     stopScanRef.current = bleService.scanDevices((d) => {
       setDevices((prev) =>
         prev.some((x) => x.id === d.id) ? prev : [...prev, d],
       );
     });
+  }, []);
+
+  useEffect(() => {
+    if (!visible) return;
+    setDevices([]);
+    setConnecting(null);
+    startScan();
 
     return () => {
       stopScanRef.current?.();
       stopScanRef.current = null;
+      setScanning(false);
     };
-  }, [visible]);
+  }, [visible, startScan]);
 
   const handleSelect = async (deviceId: string) => {
     stopScanRef.current?.();
@@ -75,9 +85,15 @@ export function BleScanSheet({ visible, onClose }: Props) {
 
         <View style={styles.header}>
           <Text style={styles.title}>Nearby ClusterDuck Devices</Text>
-          <ActivityIndicator size="small" color="#f27f0d" />
+          {scanning && <ActivityIndicator size="small" color="#f27f0d" />}
         </View>
-        <Text style={styles.subtitle}>Scanning for devices via Bluetooth…</Text>
+        <Text style={styles.subtitle}>
+          {scanning
+            ? "Scanning for devices via Bluetooth…"
+            : devices.length > 0
+              ? "Tap a device to connect."
+              : "No devices found. Try scanning again."}
+        </Text>
 
         {devices.length === 0 ? (
           <View style={styles.empty}>
@@ -129,6 +145,12 @@ export function BleScanSheet({ visible, onClose }: Props) {
           />
         )}
 
+        {!scanning && (
+          <Pressable style={styles.rescanBtn} onPress={startScan}>
+            <MaterialIcons name="refresh" size={16} color="#f27f0d" />
+            <Text style={styles.rescanText}>Scan Again</Text>
+          </Pressable>
+        )}
         <Pressable style={styles.cancelBtn} onPress={onClose}>
           <Text style={styles.cancelText}>Cancel</Text>
         </Pressable>
@@ -234,5 +256,21 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "700",
     color: "#6b7280",
+  },
+  rescanBtn: {
+    marginTop: 8,
+    paddingVertical: 12,
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    justifyContent: "center" as const,
+    gap: 6,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#f27f0d",
+  },
+  rescanText: {
+    fontSize: 14,
+    fontWeight: "600" as const,
+    color: "#f27f0d",
   },
 });
