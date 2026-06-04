@@ -26,6 +26,9 @@ interface SerialContextValue {
   sendSOS: (location?: {
     latitude: number;
     longitude: number;
+    altitude?: number | null;
+    speed?: number | null;
+    heading?: number | null;
   }) => Promise<void>;
   sendMessage: (opts: {
     text: string;
@@ -38,7 +41,13 @@ interface SerialContextValue {
     location?: { latitude: number; longitude: number },
     mid?: string,
   ) => Promise<void>;
-  sendGps: (location?: { latitude: number; longitude: number }) => Promise<void>;
+  sendGps: (location?: {
+    latitude: number;
+    longitude: number;
+    altitude?: number | null;
+    speed?: number | null;
+    heading?: number | null;
+  }) => Promise<void>;
 }
 
 const SerialContext = createContext<SerialContextValue>({
@@ -139,7 +148,13 @@ export function SerialProvider({ children }: { children: React.ReactNode }) {
         const loc = gpsRef.current;
         if (loc.status === "ready") {
           svc
-            .sendGps({ latitude: loc.coords.latitude, longitude: loc.coords.longitude })
+            .sendGps({
+              latitude: loc.coords.latitude,
+              longitude: loc.coords.longitude,
+              altitude: loc.coords.altitude,
+              speed: loc.coords.speed,
+              heading: loc.coords.heading,
+            })
             .catch((e) => console.warn("[GPS] sendGps failed:", e));
         } else if (loc.status === "denied" || loc.status === "error" || Date.now() >= deadline) {
           // Permission denied, a GPS error occurred, or timeout — send none so

@@ -86,7 +86,7 @@ export default function HomeScreen() {
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
       <View style={styles.container}>
         <View style={styles.header}>
-          <Text style={styles.headerTitle}>Taqi Rescue</Text>
+          <Text style={styles.headerTitle}>RescueLink</Text>
           <Pressable
             style={styles.newMessageBtn}
             onPress={() => router.push("/(tabs)/messages")}

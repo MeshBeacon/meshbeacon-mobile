@@ -262,7 +262,14 @@ export interface ITransport {
   disconnect(): Promise<void>;
 
   /** Send an SOS frame with optional GPS. */
-  sendSOS(location?: { latitude: number; longitude: number }): Promise<void>;
+  sendSOS(location?: {
+    latitude: number;
+    longitude: number;
+    altitude?: number | null;
+    /** Speed in m/s as reported by the OS. */
+    speed?: number | null;
+    heading?: number | null;
+  }): Promise<void>;
 
   /** Send a structured text message. */
   sendMessage(opts: {
@@ -288,6 +295,14 @@ export interface ITransport {
   /**
    * Reply to a GPSREQ frame with the phone's current GPS coordinates.
    * Omit `location` when GPS is unavailable — the ESP32 will receive LAT:none,LNG:none.
+   * Include altitude (m), speed (m/s — firmware converts to km/h), and heading (°) when available.
    */
-  sendGps(location?: { latitude: number; longitude: number }): Promise<void>;
+  sendGps(location?: {
+    latitude: number;
+    longitude: number;
+    altitude?: number | null;
+    /** Speed in m/s as reported by the OS. Converted to km/h (×3.6) before sending. */
+    speed?: number | null;
+    heading?: number | null;
+  }): Promise<void>;
 }

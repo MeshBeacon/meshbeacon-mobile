@@ -1,7 +1,14 @@
 import * as Location from "expo-location";
 import { useEffect, useState } from "react";
 
-export type GpsCoords = { latitude: number; longitude: number };
+export type GpsCoords = {
+  latitude: number;
+  longitude: number;
+  altitude?: number | null;
+  /** Speed in m/s as reported by the OS. Convert to km/h (×3.6) before display/sending. */
+  speed?: number | null;
+  heading?: number | null;
+};
 
 export type GpsState =
   | { status: "idle" }
@@ -59,6 +66,9 @@ export function useLocation(
             coords: {
               latitude: last.coords.latitude,
               longitude: last.coords.longitude,
+              altitude: last.coords.altitude,
+              speed: last.coords.speed,
+              heading: last.coords.heading,
             },
           });
         } else {
@@ -95,6 +105,9 @@ export function useLocation(
               coords: {
                 latitude: loc.coords.latitude,
                 longitude: loc.coords.longitude,
+                altitude: loc.coords.altitude,
+                speed: loc.coords.speed,
+                heading: loc.coords.heading,
               },
             });
           },

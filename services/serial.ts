@@ -238,15 +238,20 @@ class SerialService implements ITransport {
   async sendSOS(location?: {
     latitude: number;
     longitude: number;
+    altitude?: number | null;
+    speed?: number | null;
+    heading?: number | null;
   }): Promise<void> {
     const lat = location ? location.latitude.toFixed(6) : "none";
     const lng = location ? location.longitude.toFixed(6) : "none";
-    await this.sendRaw(`${FRAME_SOURCE}:SOS,LAT:${lat},LNG:${lng}`);
+    let frame = `${FRAME_SOURCE}:SOS,LAT:${lat},LNG:${lng}`;
+    if (location) {
+      if (location.altitude != null) frame += `,ALT:${location.altitude.toFixed(1)}`;
+      if (location.speed != null) frame += `,SPD:${(location.speed * 3.6).toFixed(1)}`;
+      if (location.heading != null) frame += `,HDG:${location.heading.toFixed(1)}`;
+    }
+    await this.sendRaw(frame);
   }
-
-  /**
-   * Send a structured text message to the ESP32.
-   */
   async sendMessage(opts: {
     text: string;
     urgency: "low" | "medium" | "critical";
@@ -284,10 +289,22 @@ class SerialService implements ITransport {
     );
   }
 
-  async sendGps(location?: { latitude: number; longitude: number }): Promise<void> {
+  async sendGps(location?: {
+    latitude: number;
+    longitude: number;
+    altitude?: number | null;
+    speed?: number | null;
+    heading?: number | null;
+  }): Promise<void> {
     const lat = location ? location.latitude.toFixed(6) : "none";
     const lng = location ? location.longitude.toFixed(6) : "none";
-    await this.sendRaw(`${FRAME_SOURCE}:GPS,LAT:${lat},LNG:${lng}`);
+    let frame = `${FRAME_SOURCE}:GPS,LAT:${lat},LNG:${lng}`;
+    if (location) {
+      if (location.altitude != null) frame += `,ALT:${location.altitude.toFixed(1)}`;
+      if (location.speed != null) frame += `,SPD:${(location.speed * 3.6).toFixed(1)}`;
+      if (location.heading != null) frame += `,HDG:${location.heading.toFixed(1)}`;
+    }
+    await this.sendRaw(frame);
   }
 }
 
