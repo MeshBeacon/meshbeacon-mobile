@@ -425,6 +425,12 @@ class BleService implements ITransport {
     );
   }
 
+  async sendGps(location?: { latitude: number; longitude: number }): Promise<void> {
+    const lat = location ? location.latitude.toFixed(6) : "none";
+    const lng = location ? location.longitude.toFixed(6) : "none";
+    await this.sendRaw(`${FRAME_SOURCE}:GPS,LAT:${lat},LNG:${lng}`);
+  }
+
   // ── Scan for devices ───────────────────────────────────────────────────────
 
   /**

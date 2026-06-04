@@ -283,6 +283,12 @@ class SerialService implements ITransport {
       `${FRAME_SOURCE}:MTALK,TARGET:${targetId},LAT:${lat},LNG:${lng},TEXT:${sanitised}${midSuffix}`,
     );
   }
+
+  async sendGps(location?: { latitude: number; longitude: number }): Promise<void> {
+    const lat = location ? location.latitude.toFixed(6) : "none";
+    const lng = location ? location.longitude.toFixed(6) : "none";
+    await this.sendRaw(`${FRAME_SOURCE}:GPS,LAT:${lat},LNG:${lng}`);
+  }
 }
 
 export const serialService = new SerialService();

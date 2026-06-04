@@ -4,6 +4,7 @@ import {
     type TransportStatus,
 } from "@/services";
 import { bleService } from "@/services/ble";
+import { useLocationCtx } from "@/contexts/location-context";
 import React, {
     createContext,
     useCallback,
@@ -37,6 +38,7 @@ interface SerialContextValue {
     location?: { latitude: number; longitude: number },
     mid?: string,
   ) => Promise<void>;
+  sendGps: (location?: { latitude: number; longitude: number }) => Promise<void>;
 }
 
 const SerialContext = createContext<SerialContextValue>({
@@ -49,6 +51,7 @@ const SerialContext = createContext<SerialContextValue>({
   sendSOS: async () => {},
   sendMessage: async () => {},
   sendMTalk: async () => {},
+  sendGps: async () => {},
 });
 
 export function SerialProvider({ children }: { children: React.ReactNode }) {
@@ -111,6 +114,46 @@ export function SerialProvider({ children }: { children: React.ReactNode }) {
     ) => serviceForMode(mode).sendMTalk(targetId, text, location, mid),
     [mode],
   );
+  const sendGps = useCallback(
+    (loc?: { latitude: number; longitude: number }) =>
+      serviceForMode(mode).sendGps(loc),
+    [mode],
+  );
+
+  // Auto-respond to GPSREQ frames from the ESP32 with the phone's GPS coords.
+  const gps = useLocationCtx();
+  const gpsRef = useRef(gps);
+  useEffect(() => { gpsRef.current = gps; }, [gps]);
+  useEffect(() => {
+    return serviceForMode(mode).onFrameReceived((frame) => {
+      if (frame.type !== "GPSREQ") return;
+
+      const svc = serviceForMode(mode);
+
+      // Poll gpsRef every 200 ms until either GPS is ready or the deadline
+      // (5 s) passes, then fall back to sending "none" so the firmware can
+      // still record a FIX:0 entry rather than waiting indefinitely.
+      const deadline = Date.now() + 5000;
+
+      const trySend = () => {
+        const loc = gpsRef.current;
+        if (loc.status === "ready") {
+          svc
+            .sendGps({ latitude: loc.coords.latitude, longitude: loc.coords.longitude })
+            .catch((e) => console.warn("[GPS] sendGps failed:", e));
+        } else if (loc.status === "denied" || loc.status === "error" || Date.now() >= deadline) {
+          // Permission denied, a GPS error occurred, or timeout — send none so
+          // the firmware can at least record that the phone has no fix.
+          svc.sendGps().catch((e) => console.warn("[GPS] sendGps (no fix) failed:", e));
+        } else {
+          // Still acquiring — try again shortly.
+          setTimeout(trySend, 200);
+        }
+      };
+
+      trySend();
+    });
+  }, [mode]);
 
   return (
     <SerialContext.Provider
@@ -124,6 +167,7 @@ export function SerialProvider({ children }: { children: React.ReactNode }) {
         sendSOS,
         sendMessage,
         sendMTalk,
+        sendGps,
       }}
     >
       {children}

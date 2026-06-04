@@ -93,6 +93,12 @@ export type MackFrame = {
   /** Duck ID of the peer who received and acknowledged the message. */
   from: string;
 };
+/**
+ * Sent by the ESP32 when it needs the phone's GPS location.
+ * The app should respond with CDK:GPS,LAT:<lat>,LNG:<lng>\n.
+ * Occurs on boards with no built-in GPS module, or when the module has no fix.
+ */
+export type GpsReqFrame = { type: "GPSREQ" };
 export type UnknownFrame = { type: string; raw: string };
 
 export type IncomingFrame =
@@ -106,6 +112,7 @@ export type IncomingFrame =
   | DeviceSosFrame
   | MTalkFrame
   | MackFrame
+  | GpsReqFrame
   | UnknownFrame;
 
 export type FrameCallback = (frame: IncomingFrame) => void;
@@ -208,6 +215,8 @@ export function parseIncomingLine(line: string): IncomingFrame | null {
         id: fields["ID"] ?? "",
         from: fields["FROM"] ?? "",
       };
+    case "GPSREQ":
+      return { type: "GPSREQ" };
   }
 
   return { type, raw: trimmed };
@@ -275,4 +284,10 @@ export interface ITransport {
     location?: { latitude: number; longitude: number },
     mid?: string,
   ): Promise<void>;
+
+  /**
+   * Reply to a GPSREQ frame with the phone's current GPS coordinates.
+   * Omit `location` when GPS is unavailable — the ESP32 will receive LAT:none,LNG:none.
+   */
+  sendGps(location?: { latitude: number; longitude: number }): Promise<void>;
 }
