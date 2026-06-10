@@ -1,10 +1,10 @@
+import { useLocationCtx } from "@/contexts/location-context";
 import {
     defaultTransportMode,
     serviceForMode,
     type TransportStatus,
 } from "@/services";
 import { bleService } from "@/services/ble";
-import { useLocationCtx } from "@/contexts/location-context";
 import React, {
     createContext,
     useCallback,
@@ -132,7 +132,9 @@ export function SerialProvider({ children }: { children: React.ReactNode }) {
   // Auto-respond to GPSREQ frames from the ESP32 with the phone's GPS coords.
   const gps = useLocationCtx();
   const gpsRef = useRef(gps);
-  useEffect(() => { gpsRef.current = gps; }, [gps]);
+  useEffect(() => {
+    gpsRef.current = gps;
+  }, [gps]);
   useEffect(() => {
     return serviceForMode(mode).onFrameReceived((frame) => {
       if (frame.type !== "GPSREQ") return;
@@ -156,10 +158,16 @@ export function SerialProvider({ children }: { children: React.ReactNode }) {
               heading: loc.coords.heading,
             })
             .catch((e) => console.warn("[GPS] sendGps failed:", e));
-        } else if (loc.status === "denied" || loc.status === "error" || Date.now() >= deadline) {
+        } else if (
+          loc.status === "denied" ||
+          loc.status === "error" ||
+          Date.now() >= deadline
+        ) {
           // Permission denied, a GPS error occurred, or timeout — send none so
           // the firmware can at least record that the phone has no fix.
-          svc.sendGps().catch((e) => console.warn("[GPS] sendGps (no fix) failed:", e));
+          svc
+            .sendGps()
+            .catch((e) => console.warn("[GPS] sendGps (no fix) failed:", e));
         } else {
           // Still acquiring — try again shortly.
           setTimeout(trySend, 200);

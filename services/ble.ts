@@ -333,6 +333,10 @@ class BleService implements ITransport {
   }
 
   async disconnect(): Promise<void> {
+    // Notify the device before dropping the connection so it can show a
+    // "Bluetooth disconnected" splash immediately instead of waiting for
+    // its idle-timeout heuristic.
+    try { await this.sendRaw("CDK:BYE"); } catch { /* best effort */ }
     try {
       this.rxSubscription?.remove();
       this.rxSubscription = null;
@@ -391,9 +395,12 @@ class BleService implements ITransport {
     const lng = location ? location.longitude.toFixed(6) : "none";
     let frame = `${FRAME_SOURCE}:SOS,LAT:${lat},LNG:${lng}`;
     if (location) {
-      if (location.altitude != null) frame += `,ALT:${location.altitude.toFixed(1)}`;
-      if (location.speed != null) frame += `,SPD:${(location.speed * 3.6).toFixed(1)}`;
-      if (location.heading != null) frame += `,HDG:${location.heading.toFixed(1)}`;
+      if (location.altitude != null)
+        frame += `,ALT:${location.altitude.toFixed(1)}`;
+      if (location.speed != null)
+        frame += `,SPD:${(location.speed * 3.6).toFixed(1)}`;
+      if (location.heading != null)
+        frame += `,HDG:${location.heading.toFixed(1)}`;
     }
     await this.sendRaw(frame);
   }
@@ -445,9 +452,12 @@ class BleService implements ITransport {
     const lng = location ? location.longitude.toFixed(6) : "none";
     let frame = `${FRAME_SOURCE}:GPS,LAT:${lat},LNG:${lng}`;
     if (location) {
-      if (location.altitude != null) frame += `,ALT:${location.altitude.toFixed(1)}`;
-      if (location.speed != null) frame += `,SPD:${(location.speed * 3.6).toFixed(1)}`;
-      if (location.heading != null) frame += `,HDG:${location.heading.toFixed(1)}`;
+      if (location.altitude != null)
+        frame += `,ALT:${location.altitude.toFixed(1)}`;
+      if (location.speed != null)
+        frame += `,SPD:${(location.speed * 3.6).toFixed(1)}`;
+      if (location.heading != null)
+        frame += `,HDG:${location.heading.toFixed(1)}`;
     }
     await this.sendRaw(frame);
   }
@@ -505,9 +515,8 @@ class BleService implements ITransport {
 
           const name = device.name ?? device.localName;
           const hasNUS =
-            device.serviceUUIDs?.some(
-              (u) => u.toLowerCase() === NUS_SERVICE,
-            ) ?? false;
+            device.serviceUUIDs?.some((u) => u.toLowerCase() === NUS_SERVICE) ??
+            false;
 
           // Remember if NUS UUID was seen before the name arrived (old firmware:
           // name is in scan response, UUID is in primary ad — opposite order).

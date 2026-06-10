@@ -138,7 +138,11 @@ export function parseIncomingLine(line: string): IncomingFrame | null {
   // one key's value-start and the next key's boundary as that key's value.
   const fields: Record<string, string> = {};
   const kvRe = /(^|,)([A-Z0-9_]+):/g;
-  const kvEntries: Array<{ key: string; valueStart: number; matchStart: number }> = [];
+  const kvEntries: Array<{
+    key: string;
+    valueStart: number;
+    matchStart: number;
+  }> = [];
   let kvMatch: RegExpExecArray | null;
   while ((kvMatch = kvRe.exec(rest)) !== null) {
     kvEntries.push({
@@ -148,7 +152,8 @@ export function parseIncomingLine(line: string): IncomingFrame | null {
     });
   }
   for (let i = 0; i < kvEntries.length; i++) {
-    const end = i + 1 < kvEntries.length ? kvEntries[i + 1].matchStart : rest.length;
+    const end =
+      i + 1 < kvEntries.length ? kvEntries[i + 1].matchStart : rest.length;
     fields[kvEntries[i].key] = rest.slice(kvEntries[i].valueStart, end).trim();
   }
 

@@ -188,6 +188,9 @@ class SerialService implements ITransport {
 
       this.setStatus("connected");
       this.startDisconnectPoll();
+      // Greet the device so it knows the phone is connected immediately
+      // (device waits for any CDK: frame to trigger its "USB connected" splash).
+      await this.sendRaw("CDK:HELLO").catch(() => {});
       return true;
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -199,8 +202,18 @@ class SerialService implements ITransport {
     }
   }
 
+  private _disconnecting = false;
+
   async disconnect(): Promise<void> {
+    // Guard against re-entrant calls: sendRaw() calls disconnect() on send
+    // failure, which would otherwise loop if we send CDK:BYE here.
+    if (this._disconnecting) return;
+    this._disconnecting = true;
     this.stopDisconnectPoll();
+    // Notify the device before closing the port so it can show a
+    // "USB disconnected" splash immediately instead of waiting for
+    // its 30-second idle-timeout heuristic.
+    try { await this.sendRaw("CDK:BYE"); } catch { /* cable may already be unplugged */ }
     try {
       this.rxSubscription?.remove();
       this.rxSubscription = null;
@@ -211,6 +224,7 @@ class SerialService implements ITransport {
     this.lineBuffer.clear();
     this.port = null;
     this.deviceId = null;
+    this._disconnecting = false;
     this.setStatus("disconnected");
   }
 
@@ -246,9 +260,12 @@ class SerialService implements ITransport {
     const lng = location ? location.longitude.toFixed(6) : "none";
     let frame = `${FRAME_SOURCE}:SOS,LAT:${lat},LNG:${lng}`;
     if (location) {
-      if (location.altitude != null) frame += `,ALT:${location.altitude.toFixed(1)}`;
-      if (location.speed != null) frame += `,SPD:${(location.speed * 3.6).toFixed(1)}`;
-      if (location.heading != null) frame += `,HDG:${location.heading.toFixed(1)}`;
+      if (location.altitude != null)
+        frame += `,ALT:${location.altitude.toFixed(1)}`;
+      if (location.speed != null)
+        frame += `,SPD:${(location.speed * 3.6).toFixed(1)}`;
+      if (location.heading != null)
+        frame += `,HDG:${location.heading.toFixed(1)}`;
     }
     await this.sendRaw(frame);
   }
@@ -300,9 +317,12 @@ class SerialService implements ITransport {
     const lng = location ? location.longitude.toFixed(6) : "none";
     let frame = `${FRAME_SOURCE}:GPS,LAT:${lat},LNG:${lng}`;
     if (location) {
-      if (location.altitude != null) frame += `,ALT:${location.altitude.toFixed(1)}`;
-      if (location.speed != null) frame += `,SPD:${(location.speed * 3.6).toFixed(1)}`;
-      if (location.heading != null) frame += `,HDG:${location.heading.toFixed(1)}`;
+      if (location.altitude != null)
+        frame += `,ALT:${location.altitude.toFixed(1)}`;
+      if (location.speed != null)
+        frame += `,SPD:${(location.speed * 3.6).toFixed(1)}`;
+      if (location.heading != null)
+        frame += `,HDG:${location.heading.toFixed(1)}`;
     }
     await this.sendRaw(frame);
   }
