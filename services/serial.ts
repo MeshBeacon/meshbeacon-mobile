@@ -58,6 +58,12 @@ class SerialService implements ITransport {
   private rxSubscription: ReturnType<UsbSerial["onReceived"]> | null = null;
   private _status: TransportStatus = "disconnected";
   private _pollTimer: ReturnType<typeof setInterval> | null = null;
+  private _keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+
+  // The firmware clears usbPhoneSeen after USB_IDLE_TIMEOUT_MS (30 s) of
+  // silence. Send a PING every 20 s so the device always sees the phone as
+  // connected, mirroring how BLE uses the NimBLE connection-supervision timeout.
+  private readonly KEEPALIVE_INTERVAL_MS = 20_000;
 
   private startDisconnectPoll() {
     this._pollTimer = setInterval(async () => {
@@ -76,6 +82,23 @@ class SerialService implements ITransport {
         // ignore transient poll errors
       }
     }, 2000);
+  }
+
+  private startKeepalive() {
+    this._keepaliveTimer = setInterval(() => {
+      if (this._status !== "connected") return;
+      this.sendRaw("CDK:PING").catch(() => {
+        // Swallow — sendRaw will call disconnect() on a real cable failure,
+        // which stops this timer via stopKeepalive().
+      });
+    }, this.KEEPALIVE_INTERVAL_MS);
+  }
+
+  private stopKeepalive() {
+    if (this._keepaliveTimer !== null) {
+      clearInterval(this._keepaliveTimer);
+      this._keepaliveTimer = null;
+    }
   }
 
   private stopDisconnectPoll() {
@@ -188,6 +211,7 @@ class SerialService implements ITransport {
 
       this.setStatus("connected");
       this.startDisconnectPoll();
+      this.startKeepalive();
       // Greet the device so it knows the phone is connected immediately
       // (device waits for any CDK: frame to trigger its "USB connected" splash).
       await this.sendRaw("CDK:HELLO").catch(() => {});
@@ -210,6 +234,7 @@ class SerialService implements ITransport {
     if (this._disconnecting) return;
     this._disconnecting = true;
     this.stopDisconnectPoll();
+    this.stopKeepalive();
     // Notify the device before closing the port so it can show a
     // "USB disconnected" splash immediately instead of waiting for
     // its 30-second idle-timeout heuristic.
