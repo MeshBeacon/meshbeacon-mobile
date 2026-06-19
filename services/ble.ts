@@ -476,6 +476,7 @@ class BleService implements ITransport {
     onFound: (d: ScannedDevice) => void,
     timeoutMs = 0,
     onComplete?: () => void,
+    onError?: (message: string) => void,
   ): () => void {
     // Two-phase confirmation:
     //  1. A device enters `candidates` when its name matches the 8-char CDP rule
@@ -513,7 +514,10 @@ class BleService implements ITransport {
           if (err || !device) return;
           if (seen.has(device.id)) return;
 
-          const name = device.name ?? device.localName;
+          // Use || not ?? — on iOS, device.name can be "" (empty string) for
+          // peripherals never previously connected; ?? does not fall back on ""
+          // but || does, so localName (from the advertising packet) is used.
+          const name = device.name || device.localName;
           const hasNUS =
             device.serviceUUIDs?.some((u) => u.toLowerCase() === NUS_SERVICE) ??
             false;
@@ -561,12 +565,22 @@ class BleService implements ITransport {
     // adapter is already on (typical on Android), startScan() is called
     // synchronously after permissions resolve.
     requestAndroidBlePermissions().then((granted) => {
-      if (!granted || stopped) return;
+      if (!granted || stopped) {
+        onError?.("Bluetooth permissions denied. Enable in Settings.");
+        return;
+      }
       stateSub = mgr.onStateChange((state) => {
         if (state === State.PoweredOn) {
           stateSub?.remove();
           stateSub = null;
           startScan();
+        } else if (state === State.Unauthorized) {
+          // iOS: Bluetooth permission denied for this app.
+          stateSub?.remove();
+          stateSub = null;
+          onError?.("Bluetooth permission denied. Go to Settings \u203a Privacy \u203a Bluetooth and enable it for this app.");
+        } else if (state === State.PoweredOff) {
+          onError?.("Bluetooth is off. Please enable it and try again.");
         }
       }, true); // true = emit current state immediately
     });
@@ -633,7 +647,7 @@ class BleService implements ITransport {
             return;
           }
           if (device) {
-            const name = device.name ?? device.localName;
+            const name = device.name || device.localName;
             if (name && isClusterDuckDevice(name)) {
               clearTimeout(timer);
               finish(device);

@@ -36,25 +36,36 @@ export function BleScanSheet({ visible, onClose }: Props) {
   const [devices, setDevices] = useState<ScannedDevice[]>([]);
   const [connecting, setConnecting] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
   const stopScanRef = useRef<(() => void) | null>(null);
 
   const startScan = useCallback(() => {
     stopScanRef.current?.();
     setScanning(true);
+    setScanError(null);
     // No timeout — scan runs continuously until the user picks a device or
     // closes the sheet. The stop function is called in the cleanup effect and
     // in handleSelect.
-    stopScanRef.current = bleService.scanDevices((d) => {
-      setDevices((prev) =>
-        prev.some((x) => x.id === d.id) ? prev : [...prev, d],
-      );
-    });
+    stopScanRef.current = bleService.scanDevices(
+      (d) => {
+        setDevices((prev) =>
+          prev.some((x) => x.id === d.id) ? prev : [...prev, d],
+        );
+      },
+      0,
+      undefined,
+      (msg) => {
+        setScanError(msg);
+        setScanning(false);
+      },
+    );
   }, []);
 
   useEffect(() => {
     if (!visible) return;
     setDevices([]);
     setConnecting(null);
+    setScanError(null);
     startScan();
 
     return () => {
@@ -88,23 +99,29 @@ export function BleScanSheet({ visible, onClose }: Props) {
           {scanning && <ActivityIndicator size="small" color="#f27f0d" />}
         </View>
         <Text style={styles.subtitle}>
-          {scanning
-            ? "Scanning for devices via Bluetooth…"
-            : devices.length > 0
-              ? "Tap a device to connect."
-              : "No devices found. Try scanning again."}
+          {scanError
+            ? "Bluetooth unavailable"
+            : scanning
+              ? "Scanning for devices via Bluetooth…"
+              : devices.length > 0
+                ? "Tap a device to connect."
+                : "No devices found. Try scanning again."}
         </Text>
 
         {devices.length === 0 ? (
           <View style={styles.empty}>
             <MaterialIcons
-              name="bluetooth-searching"
+              name={scanError ? "bluetooth-disabled" : "bluetooth-searching"}
               size={44}
               color="#d1d5db"
             />
-            <Text style={styles.emptyText}>No devices found yet</Text>
+            <Text style={styles.emptyText}>
+              {scanError ? "Bluetooth permission error" : "No devices found yet"}
+            </Text>
             <Text style={styles.emptyHint}>
-              Make sure the device is powered on and nearby
+              {scanError
+                ? scanError
+                : "Make sure the device is powered on and nearby"}
             </Text>
           </View>
         ) : (
