@@ -99,6 +99,31 @@ export type MackFrame = {
  * Occurs on boards with no built-in GPS module, or when the module has no fix.
  */
 export type GpsReqFrame = { type: "GPSREQ" };
+/**
+ * Confirmation that the operator's system (OpenDMS) received the SOS.
+ * Broadcast by the firmware when it receives topic-22 "SOS DITERIMA" from the hub.
+ */
+export type SosAckFrame = {
+  type: "SOS_ACK";
+  text: string;
+  receivedAt: number;
+};
+/**
+ * Emitted by the firmware whenever it receives a packet from another duck.
+ * Used by the app to populate the Nearby Ducks list in the Nearby screen.
+ *
+ *   CDK:SEEN,ID:DUCK0001,TYPE:MAMA\n
+ *
+ * TYPE values mirror CDP DuckType: MAMA, LINK, PAPA, DETC, UNKN.
+ */
+export type SeenFrame = {
+  type: "SEEN";
+  /** 8-character ASCII Duck ID of the peer that was seen. */
+  duckId: string;
+  /** Duck type string: "MAMA" | "LINK" | "PAPA" | "DETC" | "UNKN" */
+  duckType: string;
+  receivedAt: number;
+};
 export type UnknownFrame = { type: string; raw: string };
 
 export type IncomingFrame =
@@ -113,6 +138,8 @@ export type IncomingFrame =
   | MTalkFrame
   | MackFrame
   | GpsReqFrame
+  | SosAckFrame
+  | SeenFrame
   | UnknownFrame;
 
 export type FrameCallback = (frame: IncomingFrame) => void;
@@ -220,8 +247,21 @@ export function parseIncomingLine(line: string): IncomingFrame | null {
         id: fields["ID"] ?? "",
         from: fields["FROM"] ?? "",
       };
+    case "SEEN":
+      return {
+        type: "SEEN",
+        duckId: fields["ID"] ?? "",
+        duckType: fields["TYPE"] ?? "UNKN",
+        receivedAt: Date.now(),
+      };
     case "GPSREQ":
       return { type: "GPSREQ" };
+    case "SOS_ACK":
+      return {
+        type: "SOS_ACK",
+        text: fields["TEXT"] ?? rest,
+        receivedAt: Date.now(),
+      };
   }
 
   return { type, raw: trimmed };

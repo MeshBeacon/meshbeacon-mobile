@@ -14,6 +14,7 @@
 import { useBroadcastStoreCtx } from "@/contexts/broadcast-store-context";
 import { useChatStoreCtx } from "@/contexts/chat-store-context";
 import { useMessageStoreCtx } from "@/contexts/message-store-context";
+import { useNearbyDucksCtx } from "@/contexts/nearby-ducks-context";
 import { useSerial } from "@/contexts/serial-context";
 import type { StoredBroadcast } from "@/hooks/use-broadcast-store";
 import { useMessageNotifications } from "@/hooks/use-message-notifications";
@@ -29,6 +30,8 @@ import type {
     MackFrame,
     MsgFrame,
     MTalkFrame,
+    SeenFrame,
+    SosAckFrame,
     StatusFrame,
 } from "@/services/transport";
 import { useEffect, useReducer, useRef } from "react";
@@ -53,6 +56,8 @@ export interface Esp32Data {
   broadcastAlerts: StoredBroadcast[];
   /** SOS alerts triggered by the hardware button on the ESP32, newest first. */
   deviceSosAlerts: DeviceSosFrame[];
+  /** Most recent SOS acknowledgment from the operator (via OpenDMS), or null. */
+  lastSosAck: SosAckFrame | null;
 }
 
 const initial: Omit<Esp32Data, "broadcastAlerts"> = {
@@ -64,6 +69,7 @@ const initial: Omit<Esp32Data, "broadcastAlerts"> = {
   lastFrame: null,
   incomingMessages: [],
   deviceSosAlerts: [],
+  lastSosAck: null,
 };
 
 type Action = IncomingFrame | { type: "__RESET__" };
@@ -127,6 +133,12 @@ function reduce(state: ReducerState, action: Action): ReducerState {
         lastFrame: frame,
       };
     }
+    case "SOS_ACK":
+      return {
+        ...state,
+        lastSosAck: frame as SosAckFrame,
+        lastFrame: frame,
+      };
     default:
       return { ...state, lastFrame: frame };
   }
@@ -136,6 +148,7 @@ export function useEsp32Data(): Esp32Data {
   const [state, dispatch] = useReducer(reduce, initial);
   const { addReceived } = useMessageStoreCtx();
   const { broadcasts, addBroadcast } = useBroadcastStoreCtx();
+  const { addSeen } = useNearbyDucksCtx();
   const {
     addReceived: addChatReceived,
     incrementUnread,
@@ -147,6 +160,7 @@ export function useEsp32Data(): Esp32Data {
     notifyDeviceSOS,
     notifyEmergencyBroadcast,
     notifyDirectMessage,
+    notifySosAck,
   } = useMessageNotifications();
 
   // Reset all ESP32 data when the transport disconnects
@@ -176,11 +190,17 @@ export function useEsp32Data(): Esp32Data {
         addBroadcast(bcast.text, bcast.receivedAt);
         notifyEmergencyBroadcast(bcast.text);
       }
+      if (frame.type === "SEEN") {
+        const seen = frame as SeenFrame;
+        if (seen.duckId) addSeen(seen.duckId, seen.duckType);
+      }
       if (frame.type === "MTALK") {
         const talk = frame as MTalkFrame;
         // Deduplicate relay copies: co-located MamaDucks relay the same LoRa
         // packet, causing the connected duck to receive it more than once.
         const peerId = talk.from ?? "INCOMING";
+        // Also register the sender as a known nearby duck (MTALK implies MAMA).
+        if (talk.from) addSeen(talk.from, "MAMA");
         const dedupKey = talk.mid
           ? `mid:${talk.mid}`
           : `${peerId}:${talk.text}`;
@@ -210,10 +230,14 @@ export function useEsp32Data(): Esp32Data {
       ) {
         notifyDeviceSOS((frame as DeviceSosFrame).deviceId);
       }
+      if (frame.type === "SOS_ACK") {
+        notifySosAck();
+      }
     });
   }, [
     addReceived,
     addBroadcast,
+    addSeen,
     addChatReceived,
     incrementUnread,
     markDelivered,
@@ -221,6 +245,7 @@ export function useEsp32Data(): Esp32Data {
     notifyEmergencyBroadcast,
     notifyDeviceSOS,
     notifyDirectMessage,
+    notifySosAck,
     transportMode,
   ]);
 

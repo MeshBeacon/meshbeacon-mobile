@@ -1,6 +1,6 @@
 import { MaterialIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
     ActivityIndicator,
     Pressable,
@@ -29,6 +29,15 @@ export default function HomeScreen() {
   const [expandedBroadcasts, setExpandedBroadcasts] = useState<Set<string>>(
     new Set(),
   );
+
+  // Show an in-app confirmation when OpenDMS acknowledges the SOS.
+  const prevSosAckRef = useRef(esp32.lastSosAck);
+  useEffect(() => {
+    if (esp32.lastSosAck && esp32.lastSosAck !== prevSosAckRef.current) {
+      prevSosAckRef.current = esp32.lastSosAck;
+      showToast("SOS confirmed by operator — help is on the way.", "success");
+    }
+  }, [esp32.lastSosAck, showToast]);
 
   const toggleBroadcastExpand = (id: string) =>
     setExpandedBroadcasts((prev) => {
@@ -224,6 +233,25 @@ export default function HomeScreen() {
                 : "Connect ESP32 to enable"}
             </Text>
           </View>
+
+          {/* SOS acknowledgement banner — shown once operator confirms receipt */}
+          {esp32.lastSosAck && (
+            <View style={styles.sosAckBanner}>
+              <View style={styles.sosAckIconWrap}>
+                <MaterialIcons name="check-circle" size={28} color="#16a34a" />
+              </View>
+              <View style={styles.sosAckTexts}>
+                <Text style={styles.sosAckTitle}>SOS Received by Operator</Text>
+                <Text style={styles.sosAckBody}>Help is on the way.</Text>
+                <Text style={styles.sosAckTime}>
+                  {new Date(esp32.lastSosAck.receivedAt).toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
+                </Text>
+              </View>
+            </View>
+          )}
 
           {/* Emergency broadcast alerts */}
           {esp32.broadcastAlerts.length > 0 && (
@@ -498,6 +526,28 @@ const styles = StyleSheet.create({
   sosButtonDisabled: { opacity: 0.6 },
   sosText: { color: "#fff", fontSize: 28, fontWeight: "900", marginTop: -4 },
   sosHint: { fontSize: 13, color: "#8a7560", fontWeight: "500" },
+  sosAckBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    backgroundColor: "#f0fdf4",
+    borderWidth: 1.5,
+    borderColor: "#86efac",
+    borderRadius: 12,
+    padding: 14,
+  },
+  sosAckIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 999,
+    backgroundColor: "#dcfce7",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  sosAckTexts: { flex: 1 },
+  sosAckTitle: { fontSize: 14, fontWeight: "700", color: "#15803d" },
+  sosAckBody: { fontSize: 13, color: "#16a34a", marginTop: 2 },
+  sosAckTime: { fontSize: 11, color: "#6b7280", marginTop: 4 },
   actionCard: {
     flexDirection: "row",
     alignItems: "center",

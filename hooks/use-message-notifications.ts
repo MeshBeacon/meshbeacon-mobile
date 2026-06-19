@@ -83,10 +83,23 @@ export function useMessageNotifications() {
     });
   }
 
+  async function notifySosAck() {
+    if (!permissionGranted.current) return;
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title: "✅ SOS Received by Operator",
+        body: "Your distress signal has been received. Help is on the way.",
+        sound: true,
+      },
+      trigger: null,
+    });
+  }
+
   return {
     notifyNewMessage,
     notifyDeviceSOS,
     notifyEmergencyBroadcast,
     notifyDirectMessage,
+    notifySosAck,
   };
 }

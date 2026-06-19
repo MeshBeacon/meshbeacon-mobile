@@ -16,6 +16,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { SerialStatusBanner } from "@/components/serial-status-banner";
 import { useAddressBookCtx } from "@/contexts/address-book-context";
 import { useChatStoreCtx } from "@/contexts/chat-store-context";
+import { useNearbyDucksCtx } from "@/contexts/nearby-ducks-context";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -41,6 +42,7 @@ export default function ChatInboxScreen() {
   const router = useRouter();
   const { conversations, loaded } = useChatStoreCtx();
   const { contacts, addContact } = useAddressBookCtx();
+  const { nearbyDucks } = useNearbyDucksCtx();
 
   // ── New conversation modal ──────────────────────────────────────────────
   const [newOpen, setNewOpen] = useState(false);
@@ -251,6 +253,61 @@ export default function ChatInboxScreen() {
           </View>
 
           <View style={styles.modalDivider} />
+
+          {/* Nearby Ducks — auto-discovered from SEEN / MTALK frames */}
+          {nearbyDucks.length > 0 && (
+            <>
+              <View style={styles.modalSection}>
+                <View style={styles.abHeaderRow}>
+                  <Text style={styles.modalLabel}>Nearby Ducks</Text>
+                  <View style={styles.nearbyPill}>
+                    <MaterialIcons name="cell-tower" size={11} color="#22c55e" />
+                    <Text style={styles.nearbyPillText}>{nearbyDucks.length} discovered</Text>
+                  </View>
+                </View>
+              </View>
+              <ScrollView
+                contentContainerStyle={styles.nearbyList}
+                horizontal
+                showsHorizontalScrollIndicator={false}
+              >
+                {nearbyDucks.map((duck) => {
+                  const contact = contacts.find((c) => c.duckId === duck.duckId);
+                  const label = contact?.name ?? duck.duckId;
+                  const alreadyOpen = conversations.some((c) => c.peerId === duck.duckId);
+                  return (
+                    <Pressable
+                      key={duck.duckId}
+                      style={({ pressed }) => [
+                        styles.nearbyCard,
+                        pressed && styles.nearbyCardPressed,
+                      ]}
+                      onPress={() => openThread(duck.duckId)}
+                    >
+                      <View style={styles.nearbyAvatar}>
+                        <Text style={styles.nearbyAvatarText}>
+                          {label.charAt(0).toUpperCase()}
+                        </Text>
+                        <View style={styles.nearbyDot} />
+                      </View>
+                      <Text style={styles.nearbyName} numberOfLines={1}>
+                        {label}
+                      </Text>
+                      {contact?.name && (
+                        <Text style={styles.nearbyId} numberOfLines={1}>
+                          {duck.duckId}
+                        </Text>
+                      )}
+                      {alreadyOpen && (
+                        <MaterialIcons name="chat" size={12} color="#f27f0d" />
+                      )}
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+              <View style={styles.modalDivider} />
+            </>
+          )}
 
           {/* Address book contacts */}
           <View style={styles.modalSection}>
@@ -610,5 +667,70 @@ const styles = StyleSheet.create({
     fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
     fontWeight: "600",
     letterSpacing: 0.5,
+  },
+
+  // Nearby Ducks section
+  nearbyPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+    backgroundColor: "#f0fdf4",
+    borderWidth: 1,
+    borderColor: "#bbf7d0",
+  },
+  nearbyPillText: { fontSize: 11, fontWeight: "700", color: "#16a34a" },
+  nearbyList: {
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    gap: 10,
+    flexDirection: "row",
+  },
+  nearbyCard: {
+    alignItems: "center",
+    gap: 6,
+    width: 72,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderRadius: 14,
+    backgroundColor: "#fdf9f5",
+    borderWidth: 1,
+    borderColor: "#f0eeec",
+  },
+  nearbyCardPressed: { backgroundColor: "#f5f0ea" },
+  nearbyAvatar: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: "#22c55e",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  nearbyAvatarText: { fontSize: 19, fontWeight: "700", color: "#fff" },
+  nearbyDot: {
+    position: "absolute",
+    bottom: 1,
+    right: 1,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: "#22c55e",
+    borderWidth: 2,
+    borderColor: "#fff",
+  },
+  nearbyName: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#181411",
+    textAlign: "center",
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+  },
+  nearbyId: {
+    fontSize: 9,
+    color: "#8a7560",
+    textAlign: "center",
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
   },
 });

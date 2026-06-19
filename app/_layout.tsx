@@ -14,6 +14,7 @@ import { BroadcastStoreProvider } from "@/contexts/broadcast-store-context";
 import { ChatStoreProvider } from "@/contexts/chat-store-context";
 import { LocationProvider } from "@/contexts/location-context";
 import { MessageStoreProvider } from "@/contexts/message-store-context";
+import { NearbyDucksProvider } from "@/contexts/nearby-ducks-context";
 import { SerialProvider } from "@/contexts/serial-context";
 import { ToastProvider } from "@/contexts/toast-context";
 import { useColorScheme } from "@/hooks/use-color-scheme";
@@ -32,8 +33,9 @@ export default function RootLayout() {
           <MessageStoreProvider>
             <ChatStoreProvider>
               <BroadcastStoreProvider>
-                <SerialProvider>
-                  <ToastProvider>
+                <NearbyDucksProvider>
+                  <SerialProvider>
+                    <ToastProvider>
                     <ConnectPromptSheet />
                     <ThemeProvider
                       value={colorScheme === "dark" ? DarkTheme : DefaultTheme}
@@ -54,8 +56,9 @@ export default function RootLayout() {
                       </Stack>
                       <StatusBar style="auto" />
                     </ThemeProvider>
-                  </ToastProvider>
-                </SerialProvider>
+                    </ToastProvider>
+                  </SerialProvider>
+                </NearbyDucksProvider>
               </BroadcastStoreProvider>
             </ChatStoreProvider>
           </MessageStoreProvider>
