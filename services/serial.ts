@@ -351,6 +351,11 @@ class SerialService implements ITransport {
     }
     await this.sendRaw(frame);
   }
+
+  /** Broadcast a LoRa PING so nearby ducks respond and appear in the Nearby list. */
+  async sendScan(): Promise<void> {
+    await this.sendRaw("CDK:SCAN");
+  }
 }
 
 export const serialService = new SerialService();

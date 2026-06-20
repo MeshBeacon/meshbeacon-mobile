@@ -48,6 +48,8 @@ interface SerialContextValue {
     speed?: number | null;
     heading?: number | null;
   }) => Promise<void>;
+  /** Broadcast a LoRa PING so nearby ducks respond and appear in the Nearby list. */
+  sendScan: () => Promise<void>;
 }
 
 const SerialContext = createContext<SerialContextValue>({
@@ -61,6 +63,7 @@ const SerialContext = createContext<SerialContextValue>({
   sendMessage: async () => {},
   sendMTalk: async () => {},
   sendGps: async () => {},
+  sendScan: async () => {},
 });
 
 export function SerialProvider({ children }: { children: React.ReactNode }) {
@@ -128,6 +131,10 @@ export function SerialProvider({ children }: { children: React.ReactNode }) {
       serviceForMode(mode).sendGps(loc),
     [mode],
   );
+  const sendScan = useCallback(
+    () => serviceForMode(mode).sendScan(),
+    [mode],
+  );
 
   // Auto-respond to GPSREQ frames from the ESP32 with the phone's GPS coords.
   const gps = useLocationCtx();
@@ -191,6 +198,7 @@ export function SerialProvider({ children }: { children: React.ReactNode }) {
         sendMessage,
         sendMTalk,
         sendGps,
+        sendScan,
       }}
     >
       {children}

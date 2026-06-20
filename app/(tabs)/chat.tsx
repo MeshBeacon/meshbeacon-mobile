@@ -2,6 +2,7 @@ import { MaterialIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useState } from "react";
 import {
+    ActivityIndicator,
     Modal,
     Platform,
     Pressable,
@@ -11,12 +12,13 @@ import {
     TextInput,
     View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 
 import { SerialStatusBanner } from "@/components/serial-status-banner";
 import { useAddressBookCtx } from "@/contexts/address-book-context";
 import { useChatStoreCtx } from "@/contexts/chat-store-context";
 import { useNearbyDucksCtx } from "@/contexts/nearby-ducks-context";
+import { useSerial } from "@/contexts/serial-context";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -43,10 +45,21 @@ export default function ChatInboxScreen() {
   const { conversations, loaded } = useChatStoreCtx();
   const { contacts, addContact } = useAddressBookCtx();
   const { nearbyDucks } = useNearbyDucksCtx();
+  const { sendScan, status } = useSerial();
 
-  // ── New conversation modal ──────────────────────────────────────────────
+  // ── New conversation modal ────────────────────────────────────────────
   const [newOpen, setNewOpen] = useState(false);
   const [peerDraft, setPeerDraft] = useState("");
+  const [scanning, setScanning] = useState(false);
+
+  const openModal = () => {
+    setNewOpen(true);
+    // Trigger a LoRa PING sweep so nearby ducks appear in the list.
+    if (status === "connected") {
+      setScanning(true);
+      sendScan().catch(() => {}).finally(() => setTimeout(() => setScanning(false), 5000));
+    }
+  };
 
   const openThread = (peerId: string) => {
     setNewOpen(false);
@@ -83,7 +96,7 @@ export default function ChatInboxScreen() {
             </View>
             <Pressable
               style={styles.newBtn}
-              onPress={() => setNewOpen(true)}
+              onPress={openModal}
               accessibilityLabel="New conversation"
             >
               <MaterialIcons name="edit" size={20} color="#f27f0d" />
@@ -200,6 +213,7 @@ export default function ChatInboxScreen() {
         animationType="slide"
         onRequestClose={() => setNewOpen(false)}
       >
+        <SafeAreaProvider>
         <SafeAreaView style={styles.modal} edges={["top", "bottom"]}>
           {/* Modal header */}
           <View style={styles.modalHeader}>
@@ -254,23 +268,41 @@ export default function ChatInboxScreen() {
 
           <View style={styles.modalDivider} />
 
-          {/* Nearby Ducks — auto-discovered from SEEN / MTALK frames */}
-          {nearbyDucks.length > 0 && (
-            <>
-              <View style={styles.modalSection}>
-                <View style={styles.abHeaderRow}>
-                  <Text style={styles.modalLabel}>Nearby Ducks</Text>
-                  <View style={styles.nearbyPill}>
-                    <MaterialIcons name="cell-tower" size={11} color="#22c55e" />
-                    <Text style={styles.nearbyPillText}>{nearbyDucks.length} discovered</Text>
-                  </View>
+          {/* Nearby Ducks — discovered via LoRa SEEN/MTALK/PONG frames */}
+          <>
+            <View style={styles.modalSection}>
+              <View style={styles.abHeaderRow}>
+                <View style={styles.nearbyLabelRow}>
+                  <Text style={styles.modalLabel}>Nearby Nodes</Text>
+                  {nearbyDucks.length > 0 && (
+                    <View style={styles.nearbyPill}>
+                      <MaterialIcons name="cell-tower" size={11} color="#22c55e" />
+                      <Text style={styles.nearbyPillText}>{nearbyDucks.length} in range</Text>
+                    </View>
+                  )}
                 </View>
+                <Pressable
+                  style={[
+                    styles.scanBtn,
+                    (scanning || status !== "connected") && { opacity: 0.4 },
+                  ]}
+                  disabled={scanning || status !== "connected"}
+                  onPress={() => {
+                    setScanning(true);
+                    sendScan().catch(() => {}).finally(() => setTimeout(() => setScanning(false), 5000));
+                  }}
+                >
+                  {scanning
+                    ? <ActivityIndicator size={12} color="#f27f0d" />
+                    : <MaterialIcons name="radar" size={14} color="#f27f0d" />}
+                  <Text style={styles.scanBtnText}>
+                    {scanning ? "Scanning…" : "Scan"}
+                  </Text>
+                </Pressable>
               </View>
-              <ScrollView
-                contentContainerStyle={styles.nearbyList}
-                horizontal
-                showsHorizontalScrollIndicator={false}
-              >
+            </View>
+            {nearbyDucks.length > 0 && (
+              <View style={styles.nearbyList}>
                 {nearbyDucks.map((duck) => {
                   const contact = contacts.find((c) => c.duckId === duck.duckId);
                   const label = contact?.name ?? duck.duckId;
@@ -279,8 +311,8 @@ export default function ChatInboxScreen() {
                     <Pressable
                       key={duck.duckId}
                       style={({ pressed }) => [
-                        styles.nearbyCard,
-                        pressed && styles.nearbyCardPressed,
+                        styles.nearbyRow,
+                        pressed && styles.nearbyRowPressed,
                       ]}
                       onPress={() => openThread(duck.duckId)}
                     >
@@ -290,24 +322,49 @@ export default function ChatInboxScreen() {
                         </Text>
                         <View style={styles.nearbyDot} />
                       </View>
-                      <Text style={styles.nearbyName} numberOfLines={1}>
-                        {label}
-                      </Text>
-                      {contact?.name && (
-                        <Text style={styles.nearbyId} numberOfLines={1}>
-                          {duck.duckId}
-                        </Text>
-                      )}
-                      {alreadyOpen && (
-                        <MaterialIcons name="chat" size={12} color="#f27f0d" />
-                      )}
+                      <View style={styles.nearbyInfo}>
+                        <Text style={styles.nearbyName} numberOfLines={1}>{label}</Text>
+                        <View style={styles.nearbyMeta}>
+                          <Text style={styles.nearbyId}>{duck.duckId}</Text>
+                          <View style={styles.nearbyTypePill}>
+                            <Text style={styles.nearbyTypeText}>{duck.duckType}</Text>
+                          </View>
+                        </View>
+                        {duck.lat != null && duck.lng != null && (
+                          <View style={styles.nearbyGpsRow}>
+                            <MaterialIcons name="location-on" size={10} color="#22c55e" />
+                            <Text style={styles.nearbyGpsText}>
+                              {duck.lat.toFixed(5)}, {duck.lng.toFixed(5)}
+                            </Text>
+                          </View>
+                        )}
+                      </View>
+                      <MaterialIcons
+                        name={alreadyOpen ? "chat" : "chevron-right"}
+                        size={20}
+                        color={alreadyOpen ? "#f27f0d" : "#d1c5b8"}
+                      />
                     </Pressable>
                   );
                 })}
-              </ScrollView>
-              <View style={styles.modalDivider} />
-            </>
-          )}
+              </View>
+            )}
+            {nearbyDucks.length === 0 && !scanning && status === "connected" && (
+              <View style={styles.nearbyEmpty}>
+                <Text style={styles.nearbyEmptyText}>
+                  No nodes heard yet — tap Scan to ping the LoRa mesh
+                </Text>
+              </View>
+            )}
+            {status !== "connected" && (
+              <View style={styles.nearbyEmpty}>
+                <Text style={styles.nearbyEmptyText}>
+                  Connect to a device to discover nearby nodes
+                </Text>
+              </View>
+            )}
+          </>
+          <View style={styles.modalDivider} />
 
           {/* Address book contacts */}
           <View style={styles.modalSection}>
@@ -404,6 +461,7 @@ export default function ChatInboxScreen() {
             )}
           </ScrollView>
         </SafeAreaView>
+        </SafeAreaProvider>
       </Modal>
     </>
   );
@@ -669,7 +727,8 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
 
-  // Nearby Ducks section
+  // Nearby Nodes section
+  nearbyLabelRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   nearbyPill: {
     flexDirection: "row",
     alignItems: "center",
@@ -682,55 +741,69 @@ const styles = StyleSheet.create({
     borderColor: "#bbf7d0",
   },
   nearbyPillText: { fontSize: 11, fontWeight: "700", color: "#16a34a" },
-  nearbyList: {
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-    gap: 10,
+  scanBtn: {
     flexDirection: "row",
-  },
-  nearbyCard: {
     alignItems: "center",
-    gap: 6,
-    width: 72,
-    paddingVertical: 10,
-    paddingHorizontal: 8,
-    borderRadius: 14,
-    backgroundColor: "#fdf9f5",
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
     borderWidth: 1,
-    borderColor: "#f0eeec",
+    borderColor: "#f27f0d33",
+    backgroundColor: "#fff5ea",
   },
-  nearbyCardPressed: { backgroundColor: "#f5f0ea" },
+  scanBtnText: { fontSize: 12, fontWeight: "700", color: "#f27f0d" },
+  nearbyList: { paddingHorizontal: 16, paddingBottom: 4, gap: 8 },
+  nearbyRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    padding: 12,
+    borderRadius: 14,
+    backgroundColor: "#f0fdf4",
+    borderWidth: 1,
+    borderColor: "#bbf7d0",
+  },
+  nearbyRowPressed: { backgroundColor: "#dcfce7" },
   nearbyAvatar: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: "#22c55e",
     alignItems: "center",
     justifyContent: "center",
   },
-  nearbyAvatarText: { fontSize: 19, fontWeight: "700", color: "#fff" },
+  nearbyAvatarText: { fontSize: 17, fontWeight: "700", color: "#fff" },
   nearbyDot: {
     position: "absolute",
-    bottom: 1,
-    right: 1,
-    width: 12,
-    height: 12,
+    bottom: 0,
+    right: 0,
+    width: 11,
+    height: 11,
     borderRadius: 6,
     backgroundColor: "#22c55e",
     borderWidth: 2,
-    borderColor: "#fff",
+    borderColor: "#f0fdf4",
   },
-  nearbyName: {
-    fontSize: 11,
-    fontWeight: "700",
-    color: "#181411",
-    textAlign: "center",
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-  },
+  nearbyInfo: { flex: 1, gap: 2 },
+  nearbyName: { fontSize: 14, fontWeight: "700", color: "#181411" },
+  nearbyMeta: { flexDirection: "row", alignItems: "center", gap: 6 },
   nearbyId: {
-    fontSize: 9,
-    color: "#8a7560",
-    textAlign: "center",
+    fontSize: 11,
+    color: "#16a34a",
     fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    fontWeight: "600",
+    letterSpacing: 0.5,
   },
+  nearbyTypePill: {
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 4,
+    backgroundColor: "#bbf7d0",
+  },
+  nearbyTypeText: { fontSize: 9, fontWeight: "700", color: "#15803d", letterSpacing: 0.5 },
+  nearbyGpsRow: { flexDirection: "row", alignItems: "center", gap: 2, marginTop: 2 },
+  nearbyGpsText: { fontSize: 9, color: "#22c55e", fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" },
+  nearbyEmpty: { paddingHorizontal: 16, paddingBottom: 8 },
+  nearbyEmptyText: { fontSize: 12, color: "#a09080", fontStyle: "italic" },
 });

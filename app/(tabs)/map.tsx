@@ -1,0 +1,526 @@
+/**
+ * Map screen — shows all discovered ClusterDuck nodes that have a GPS fix.
+ *
+ * Tiles:   OpenFreeMap (https://openfreemap.org) — free, no API key, OSM-based.
+ * Offline: Tap "Save Offline" to cache the current viewport with MapLibre's
+ *          offline pack manager. Downloaded packs persist across sessions.
+ */
+
+import { MaterialIcons } from "@expo/vector-icons";
+import {
+  Camera,
+  type CameraRef,
+  Map,
+  type MapRef,
+  Marker,
+  OfflineManager,
+  type OfflinePackDownloadState,
+  type OfflinePackError,
+  OfflinePack,
+  type OfflinePackStatus,
+  UserLocation,
+} from "@maplibre/maplibre-react-native";
+import { useRouter } from "expo-router";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+
+import { useLocationCtx } from "@/contexts/location-context";
+import { useNearbyDucksCtx } from "@/contexts/nearby-ducks-context";
+import { useSerial } from "@/contexts/serial-context";
+
+// ── Map style ─────────────────────────────────────────────────────────────────
+// OpenFreeMap Liberty — vector tiles, no API key required, OSM-based.
+const MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
+const OFFLINE_PACK_NAME = "cdp_area_v1";
+
+// OfflineManager is a shared singleton exported from MapLibre.
+// It is NOT a constructor — call its methods directly.
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+interface SelectedDuck {
+  duckId: string;
+  duckType: string;
+  lat: number;
+  lng: number;
+}
+
+// ── Component ─────────────────────────────────────────────────────────────────
+export default function MapScreen() {
+  const router = useRouter();
+  const { nearbyDucks } = useNearbyDucksCtx();
+  const { sendScan, status } = useSerial();
+  const gpsState = useLocationCtx();
+
+  const mapRef = useRef<MapRef>(null);
+  const cameraRef = useRef<CameraRef>(null);
+
+  const [mapReady, setMapReady] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [offlineReady, setOfflineReady] = useState(false);
+  const [selected, setSelected] = useState<SelectedDuck | null>(null);
+
+  // Only ducks that have a confirmed GPS fix
+  const ducksWithGps = useMemo(
+    () =>
+      nearbyDucks.filter(
+        (d): d is typeof d & { lat: number; lng: number } =>
+          d.lat != null && d.lng != null,
+      ),
+    [nearbyDucks],
+  );
+
+  // Check for an existing offline pack on mount
+  useEffect(() => {
+    OfflineManager.getPacks()
+      .then((packs: OfflinePack[]) => { if (packs.length > 0) setOfflineReady(true); })
+      .catch(() => {});
+  }, []);
+
+  const userLngLat: [number, number] | null =
+    gpsState.status === "ready"
+      ? [gpsState.coords.longitude, gpsState.coords.latitude]
+      : null;
+
+  const centreOnUser = useCallback(() => {
+    if (!userLngLat) return;
+    cameraRef.current?.flyTo({ center: userLngLat, zoom: 14, duration: 600 });
+  }, [userLngLat]);
+
+  const centreOnDucks = useCallback(() => {
+    if (ducksWithGps.length === 0) return;
+    if (ducksWithGps.length === 1) {
+      cameraRef.current?.flyTo({
+        center: [ducksWithGps[0].lng, ducksWithGps[0].lat],
+        zoom: 14,
+        duration: 600,
+      });
+      return;
+    }
+    const lngs = ducksWithGps.map((d) => d.lng);
+    const lats = ducksWithGps.map((d) => d.lat);
+    if (userLngLat) { lngs.push(userLngLat[0]); lats.push(userLngLat[1]); }
+    const pad = 0.004;
+    cameraRef.current?.fitBounds(
+      [Math.min(...lngs) - pad, Math.min(...lats) - pad,
+       Math.max(...lngs) + pad, Math.max(...lats) + pad],
+      { duration: 600 },
+    );
+  }, [ducksWithGps, userLngLat]);
+
+  const handleScan = useCallback(async () => {
+    if (status !== "connected" || scanning) return;
+    setScanning(true);
+    try { await sendScan(); } catch { /* ignore */ }
+    finally { setTimeout(() => setScanning(false), 5000); }
+  }, [status, scanning, sendScan]);
+
+  const downloadOfflinePack = useCallback(async () => {
+    if (!mapRef.current) return;
+    setDownloading(true);
+    try {
+      // bounds = [west, south, east, north]
+      const bounds = await mapRef.current.getBounds();
+      await OfflineManager.createPack(
+        { mapStyle: MAP_STYLE_URL, bounds, minZoom: 4, maxZoom: 16,
+          metadata: { name: OFFLINE_PACK_NAME } },
+        (_pack: OfflinePack, packStatus: OfflinePackStatus) => {
+          const state = packStatus.state as OfflinePackDownloadState;
+          if (state === "complete") {
+            setOfflineReady(true);
+            setDownloading(false);
+          }
+        },
+        (_pack: OfflinePack, error: OfflinePackError) => {
+          setDownloading(false);
+          Alert.alert("Download failed", error.message);
+        },
+      );
+    } catch (err) {
+      setDownloading(false);
+      Alert.alert(
+        "Download failed",
+        err instanceof Error ? err.message : "Could not download offline tiles.",
+      );
+    }
+  }, []);
+
+  return (
+    <SafeAreaView style={styles.safe} edges={["top"]}>
+      <View style={styles.container}>
+        {/* ── Header ── */}
+        <View style={styles.header}>
+          <View style={styles.headerLeft}>
+            <MaterialIcons name="map" size={20} color="#f27f0d" />
+            <Text style={styles.title}>Node Map</Text>
+            {ducksWithGps.length > 0 && (
+              <View style={styles.countPill}>
+                <Text style={styles.countText}>{ducksWithGps.length}</Text>
+              </View>
+            )}
+          </View>
+          <View style={styles.headerActions}>
+            {offlineReady && (
+              <MaterialIcons
+                name="offline-pin"
+                size={16}
+                color="#22c55e"
+                style={{ marginRight: 6 }}
+              />
+            )}
+            <Pressable
+              style={[styles.headerBtn, downloading && { opacity: 0.4 }]}
+              onPress={downloadOfflinePack}
+              disabled={downloading || !mapReady}
+            >
+              {downloading ? (
+                <ActivityIndicator size={12} color="#f27f0d" />
+              ) : (
+                <MaterialIcons name="download" size={16} color="#f27f0d" />
+              )}
+              <Text style={styles.headerBtnText}>
+                {downloading ? "Saving…" : "Save Offline"}
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+
+        {/* ── Map ── */}
+        <View style={styles.mapWrap}>
+          <Map
+            ref={mapRef}
+            style={styles.map}
+            mapStyle={MAP_STYLE_URL}
+            onDidFinishLoadingMap={() => setMapReady(true)}
+            onPress={() => setSelected(null)}
+            attributionPosition={{ bottom: 20, left: 80 }}
+            logoPosition={{ bottom: 20, left: 8 }}
+          >
+            <Camera
+              ref={cameraRef}
+              initialViewState={{
+                center: userLngLat ?? [101.6869, 3.139],
+                zoom: 12,
+              }}
+            />
+
+            <UserLocation animated accuracy heading />
+
+            {/* One Marker per duck that has a GPS fix */}
+            {ducksWithGps.map((duck) => (
+              <Marker
+                key={duck.duckId}
+                lngLat={[duck.lng, duck.lat]}
+                anchor="bottom"
+                onPress={() =>
+                  setSelected({
+                    duckId: duck.duckId,
+                    duckType: duck.duckType,
+                    lat: duck.lat,
+                    lng: duck.lng,
+                  })
+                }
+              >
+                <View style={styles.markerWrap}>
+                  <View style={styles.marker}>
+                    <Text style={styles.markerType}>{duck.duckType[0]}</Text>
+                  </View>
+                  <Text style={styles.markerLabel} numberOfLines={1}>
+                    {duck.duckId}
+                  </Text>
+                  {/* Callout stem */}
+                  <View style={styles.markerStem} />
+                </View>
+              </Marker>
+            ))}
+          </Map>
+
+          {/* ── FAB column ── */}
+          <View style={styles.fabs}>
+            {/* LoRa scan */}
+            <Pressable
+              style={[
+                styles.fab,
+                (scanning || status !== "connected") && { opacity: 0.4 },
+              ]}
+              onPress={handleScan}
+              disabled={scanning || status !== "connected"}
+            >
+              {scanning ? (
+                <ActivityIndicator size={18} color="#fff" />
+              ) : (
+                <MaterialIcons name="radar" size={20} color="#fff" />
+              )}
+            </Pressable>
+
+            {/* Fit all ducks in viewport */}
+            {ducksWithGps.length > 0 && (
+              <Pressable style={styles.fab} onPress={centreOnDucks}>
+                <MaterialIcons name="zoom-out-map" size={20} color="#fff" />
+              </Pressable>
+            )}
+
+            {/* My location */}
+            <Pressable
+              style={[styles.fab, styles.fabAlt, !userLngLat && { opacity: 0.4 }]}
+              onPress={centreOnUser}
+              disabled={!userLngLat}
+            >
+              <MaterialIcons name="my-location" size={20} color="#f27f0d" />
+            </Pressable>
+          </View>
+
+          {/* ── No-GPS placeholder ── */}
+          {ducksWithGps.length === 0 && mapReady && (
+            <View style={styles.emptyOverlay} pointerEvents="none">
+              <View style={styles.emptyCard}>
+                <MaterialIcons name="cell-tower" size={32} color="#d1c5b8" />
+                <Text style={styles.emptyTitle}>No nodes with GPS</Text>
+                <Text style={styles.emptyHint}>
+                  {status === "connected"
+                    ? "Tap the radar button to ping nearby ducks"
+                    : "Connect to a device first"}
+                </Text>
+              </View>
+            </View>
+          )}
+        </View>
+
+        {/* ── Selected duck info panel ── */}
+        {selected && (
+          <View style={styles.panel}>
+            <View style={styles.panelLeft}>
+              <View style={styles.panelAvatar}>
+                <Text style={styles.panelAvatarText}>
+                  {selected.duckId.charAt(0)}
+                </Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <View style={styles.panelNameRow}>
+                  <Text style={styles.panelName} numberOfLines={1}>
+                    {selected.duckId}
+                  </Text>
+                  <View style={styles.panelTypePill}>
+                    <Text style={styles.panelTypeText}>{selected.duckType}</Text>
+                  </View>
+                </View>
+                <Text style={styles.panelCoords}>
+                  {selected.lat.toFixed(5)}, {selected.lng.toFixed(5)}
+                </Text>
+              </View>
+            </View>
+            <View style={styles.panelActions}>
+              <Pressable
+                style={styles.panelBtn}
+                onPress={() => {
+                  setSelected(null);
+                  router.push({
+                    pathname: "/chat/[peerId]" as any,
+                    params: { peerId: selected.duckId },
+                  });
+                }}
+              >
+                <MaterialIcons name="chat" size={16} color="#fff" />
+                <Text style={styles.panelBtnText}>Chat</Text>
+              </Pressable>
+              <Pressable
+                style={styles.panelClose}
+                onPress={() => setSelected(null)}
+              >
+                <MaterialIcons name="close" size={18} color="#8a7560" />
+              </Pressable>
+            </View>
+          </View>
+        )}
+      </View>
+    </SafeAreaView>
+  );
+}
+
+// ── Styles ────────────────────────────────────────────────────────────────────
+const styles = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: "#fff" },
+  container: { flex: 1 },
+
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#f27f0d1f",
+  },
+  headerLeft: { flexDirection: "row", alignItems: "center", gap: 8 },
+  title: { fontSize: 24, fontWeight: "700", color: "#181411" },
+  countPill: {
+    backgroundColor: "#f27f0d",
+    borderRadius: 10,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+  },
+  countText: { fontSize: 12, fontWeight: "700", color: "#fff" },
+  headerActions: { flexDirection: "row", alignItems: "center" },
+  headerBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#f27f0d40",
+  },
+  headerBtnText: { fontSize: 12, fontWeight: "600", color: "#f27f0d" },
+
+  mapWrap: { flex: 1 },
+  map: { flex: 1 },
+
+  markerWrap: { alignItems: "center" },
+  marker: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#f27f0d",
+    borderWidth: 2.5,
+    borderColor: "#fff",
+    alignItems: "center",
+    justifyContent: "center",
+    elevation: 4,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+  },
+  markerType: { fontSize: 11, fontWeight: "700", color: "#fff" },
+  markerLabel: {
+    marginTop: 3,
+    fontSize: 10,
+    fontWeight: "700",
+    color: "#181411",
+    backgroundColor: "rgba(255,255,255,0.9)",
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 4,
+    overflow: "hidden",
+    maxWidth: 80,
+  },
+  markerStem: {
+    width: 2,
+    height: 6,
+    backgroundColor: "#f27f0d",
+    borderRadius: 1,
+  },
+
+  fabs: {
+    position: "absolute",
+    right: 14,
+    bottom: 60,
+    gap: 10,
+  },
+  fab: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: "#f27f0d",
+    alignItems: "center",
+    justifyContent: "center",
+    elevation: 4,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+  },
+  fabAlt: { backgroundColor: "#fff", borderWidth: 1.5, borderColor: "#f27f0d" },
+
+  emptyOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "flex-end",
+    paddingBottom: 80,
+  },
+  emptyCard: {
+    backgroundColor: "rgba(255,255,255,0.92)",
+    borderRadius: 16,
+    paddingHorizontal: 24,
+    paddingVertical: 16,
+    alignItems: "center",
+    gap: 6,
+    maxWidth: 280,
+    elevation: 2,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+  },
+  emptyTitle: { fontSize: 15, fontWeight: "700", color: "#8a7560" },
+  emptyHint: {
+    fontSize: 12,
+    color: "#b0a090",
+    textAlign: "center",
+    lineHeight: 18,
+  },
+
+  panel: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: "#fff",
+    borderTopWidth: 1,
+    borderTopColor: "#f0eeec",
+    gap: 12,
+  },
+  panelLeft: { flexDirection: "row", alignItems: "center", gap: 10, flex: 1 },
+  panelAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "#f27f0d",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  panelAvatarText: { fontSize: 16, fontWeight: "700", color: "#fff" },
+  panelNameRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    flexWrap: "wrap",
+  },
+  panelName: { fontSize: 15, fontWeight: "700", color: "#181411" },
+  panelTypePill: {
+    backgroundColor: "#bbf7d0",
+    borderRadius: 4,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+  },
+  panelTypeText: { fontSize: 9, fontWeight: "700", color: "#15803d" },
+  panelCoords: {
+    fontSize: 11,
+    color: "#8a7560",
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    marginTop: 2,
+  },
+  panelActions: { flexDirection: "row", alignItems: "center", gap: 8 },
+  panelBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: "#f27f0d",
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+  },
+  panelBtnText: { fontSize: 13, fontWeight: "700", color: "#fff" },
+  panelClose: { padding: 4 },
+});

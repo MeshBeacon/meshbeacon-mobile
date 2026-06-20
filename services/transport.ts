@@ -122,6 +122,10 @@ export type SeenFrame = {
   duckId: string;
   /** Duck type string: "MAMA" | "LINK" | "PAPA" | "DETC" | "UNKN" */
   duckType: string;
+  /** GPS latitude from the duck's last known position (if available). */
+  lat?: number;
+  /** GPS longitude from the duck's last known position (if available). */
+  lng?: number;
   receivedAt: number;
 };
 export type UnknownFrame = { type: string; raw: string };
@@ -247,13 +251,22 @@ export function parseIncomingLine(line: string): IncomingFrame | null {
         id: fields["ID"] ?? "",
         from: fields["FROM"] ?? "",
       };
-    case "SEEN":
+    case "SEEN": {
+      const lat = fields["LAT"];
+      const lng = fields["LNG"];
+      const validLat =
+        lat && lat !== "none" && isFinite(parseFloat(lat)) ? parseFloat(lat) : undefined;
+      const validLng =
+        lng && lng !== "none" && isFinite(parseFloat(lng)) ? parseFloat(lng) : undefined;
       return {
         type: "SEEN",
         duckId: fields["ID"] ?? "",
         duckType: fields["TYPE"] ?? "UNKN",
+        ...(validLat !== undefined ? { lat: validLat } : {}),
+        ...(validLng !== undefined ? { lng: validLng } : {}),
         receivedAt: Date.now(),
       };
+    }
     case "GPSREQ":
       return { type: "GPSREQ" };
     case "SOS_ACK":
@@ -350,4 +363,6 @@ export interface ITransport {
     speed?: number | null;
     heading?: number | null;
   }): Promise<void>;
+  /** Broadcast a LoRa PING so nearby ducks respond and appear in the Nearby list. */
+  sendScan(): Promise<void>;
 }

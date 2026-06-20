@@ -19,6 +19,7 @@ import {
     Text,
     View,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 function rssiSignal(rssi: number): { label: string; color: string } {
   if (rssi >= -60) return { label: "Strong", color: "#16a34a" };
@@ -33,6 +34,7 @@ interface Props {
 
 export function BleScanSheet({ visible, onClose }: Props) {
   const { connectToBleDevice } = useSerial();
+  const { bottom: bottomInset } = useSafeAreaInsets();
   const [devices, setDevices] = useState<ScannedDevice[]>([]);
   const [connecting, setConnecting] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
@@ -91,7 +93,7 @@ export function BleScanSheet({ visible, onClose }: Props) {
       onRequestClose={onClose}
     >
       <Pressable style={styles.backdrop} onPress={onClose} />
-      <View style={styles.sheet}>
+      <View style={[styles.sheet, { paddingBottom: Math.max(36, bottomInset + 16) }]}>
         <View style={styles.handle} />
 
         <View style={styles.header}>
@@ -186,7 +188,6 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     paddingHorizontal: 20,
-    paddingBottom: 36,
     paddingTop: 12,
     maxHeight: "70%",
   },

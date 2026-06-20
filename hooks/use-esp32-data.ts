@@ -192,7 +192,7 @@ export function useEsp32Data(): Esp32Data {
       }
       if (frame.type === "SEEN") {
         const seen = frame as SeenFrame;
-        if (seen.duckId) addSeen(seen.duckId, seen.duckType);
+        if (seen.duckId) addSeen(seen.duckId, seen.duckType, seen.lat, seen.lng);
       }
       if (frame.type === "MTALK") {
         const talk = frame as MTalkFrame;

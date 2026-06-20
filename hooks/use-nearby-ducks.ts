@@ -22,6 +22,10 @@ export interface NearbyDuck {
   duckId: string;
   /** "MAMA" | "LINK" | "PAPA" | "DETC" | "UNKN" */
   duckType: string;
+  /** GPS latitude, if the duck has broadcast its position. */
+  lat?: number;
+  /** GPS longitude, if the duck has broadcast its position. */
+  lng?: number;
   lastSeen: number;
 }
 
@@ -34,9 +38,17 @@ export function useNearbyDucks() {
   }, []);
 
   const addSeen = useCallback(
-    (duckId: string, duckType: string) => {
+    (duckId: string, duckType: string, lat?: number, lng?: number) => {
       if (!duckId || duckId.trim().length === 0) return;
-      mapRef.current.set(duckId, { duckId, duckType, lastSeen: Date.now() });
+      const existing = mapRef.current.get(duckId);
+      mapRef.current.set(duckId, {
+        duckId,
+        duckType,
+        // Preserve previously cached GPS if this update has none
+        lat: lat ?? existing?.lat,
+        lng: lng ?? existing?.lng,
+        lastSeen: Date.now(),
+      });
       rebuild();
     },
     [rebuild],

@@ -10,7 +10,7 @@
  */
 
 import { PermissionsAndroid, Platform } from "react-native";
-import { BleError, BleManager, Device, State } from "react-native-ble-plx";
+import { BleError, BleErrorCode, BleManager, Device, State } from "react-native-ble-plx";
 import type {
     FrameCallback,
     ITransport,
@@ -261,6 +261,32 @@ class BleService implements ITransport {
       }
 
       this.device = connectedDevice;
+
+      // 4. Register disconnect handler IMMEDIATELY — before any awaited GATT
+      //    operations. If the device drops during discoverAllServices or
+      //    requestMTU, onDisconnected fires and clears this.device so subsequent
+      //    writes correctly throw "Not connected" rather than hitting a nil
+      //    native CBPeripheral (which surfaces as "Service X for device ? not found").
+      this.device.onDisconnected(() => {
+        this.rxSubscription = null;
+        this.device = null;
+        this.lineBuffer.clear();
+        this.setStatus("disconnected");
+      });
+
+      // Android's GATT stack needs a brief pause after the connection is
+      // established before service discovery is reliable.  Without this,
+      // discoverAllServicesAndCharacteristics() can return an empty service
+      // list on many Android chipsets, causing "Service X for device ? not found"
+      // on the first write even though the connection looks healthy.
+      if (Platform.OS === "android") {
+        await new Promise<void>((r) => setTimeout(r, 500));
+      }
+      if (!this.device) {
+        // Device disconnected during the pause — abort cleanly.
+        return false;
+      }
+
       await this.device.discoverAllServicesAndCharacteristics();
 
       // 5. Request larger MTU so long frames fit in one packet.
@@ -273,14 +299,6 @@ class BleService implements ITransport {
       } catch {
         this.mtuPayload = 20; // conservative fallback
       }
-
-      // 6. Monitor disconnections
-      this.device.onDisconnected(() => {
-        this.rxSubscription = null;
-        this.device = null;
-        this.lineBuffer.clear();
-        this.setStatus("disconnected");
-      });
 
       // 7. Subscribe to incoming frames from the ESP32 (NUS TX characteristic)
       this.lineBuffer.clear();
@@ -377,11 +395,36 @@ class BleService implements ITransport {
       );
     }
 
-    await this.device.writeCharacteristicWithResponseForService(
-      NUS_SERVICE,
-      NUS_RX_CHAR,
-      toBase64(payload),
-    );
+    try {
+      // WRITE_WITHOUT_RESPONSE avoids the ATT acknowledgement round-trip that
+      // can time out on Android (GATT error 133 / disconnect).  The NimBLE RX
+      // characteristic is declared with both WRITE and WRITE_NR so the ESP32
+      // accepts either form.  iOS also handles WRITE_NR correctly.
+      await this.device.writeCharacteristicWithoutResponseForService(
+        NUS_SERVICE,
+        NUS_RX_CHAR,
+        toBase64(payload),
+      );
+    } catch (writeErr) {
+      // On Android, a stale GATT connection can silently die without triggering
+      // onDisconnected. The native layer then throws ServiceNotFound or
+      // DeviceNotConnected ("Service X for device ? not found") instead.
+      // Detect this, clean up the JS state, and surface a clear error.
+      if (
+        writeErr instanceof BleError &&
+        (writeErr.errorCode === BleErrorCode.ServiceNotFound ||
+          writeErr.errorCode === BleErrorCode.CharacteristicNotFound ||
+          writeErr.errorCode === BleErrorCode.DeviceNotConnected)
+      ) {
+        this.rxSubscription?.remove();
+        this.rxSubscription = null;
+        this.device = null;
+        this.lineBuffer.clear();
+        this.setStatus("disconnected");
+        throw new Error("Device disconnected. Please reconnect.");
+      }
+      throw writeErr;
+    }
   }
 
   async sendSOS(location?: {
@@ -462,6 +505,11 @@ class BleService implements ITransport {
     await this.sendRaw(frame);
   }
 
+  /** Broadcast a LoRa PING so nearby ducks respond and appear in the Nearby list. */
+  async sendScan(): Promise<void> {
+    await this.sendRaw("CDK:SCAN");
+  }
+
   // ── Scan for devices ───────────────────────────────────────────────────────
 
   /**
@@ -488,7 +536,6 @@ class BleService implements ITransport {
     const CANDIDATE_FLUSH_MS = 3_000;
     const candidates = new Map<string, ScannedDevice>();
     const candidateTimers = new Map<string, ReturnType<typeof setTimeout>>();
-    const uuidSeen = new Set<string>(); // NUS UUID confirmed but name not yet received
     const seen = new Set<string>();
     const mgr = this.getManager();
     let stopped = false;
@@ -522,30 +569,38 @@ class BleService implements ITransport {
             device.serviceUUIDs?.some((u) => u.toLowerCase() === NUS_SERVICE) ??
             false;
 
-          // Remember if NUS UUID was seen before the name arrived (old firmware:
-          // name is in scan response, UUID is in primary ad — opposite order).
-          if (hasNUS) uuidSeen.add(device.id);
+          // Phase 1a: NUS UUID seen → this is definitively a ClusterDuck device.
+          // Add to candidates immediately (with whatever name is available or a
+          // fallback) so we never miss a device whose name is only in SCAN_RSP
+          // and iOS never sent a SCAN_REQ for it.
+          if (hasNUS && !candidates.has(device.id)) {
+            const displayName = (name && isClusterDuckDevice(name))
+              ? name
+              : name || `ClusterDuck (${device.id.slice(-5)})`;
+            candidates.set(device.id, {
+              id: device.id,
+              name: displayName,
+              rssi: device.rssi ?? -99,
+            });
+            confirm(device.id); // UUID confirmed → show immediately
+          }
 
-          // Phase 1: name matches CDP 8-char rule → add to candidates.
+          // Phase 1b: name matches CDP rule but UUID not yet seen → add to
+          // candidates and start a 3-second timer. Covers devices that put UUID
+          // only in SCAN_RSP which arrives later (or not at all on iOS).
           if (name && isClusterDuckDevice(name) && !candidates.has(device.id)) {
             candidates.set(device.id, {
               id: device.id,
               name,
               rssi: device.rssi ?? -99,
             });
-            if (uuidSeen.has(device.id)) {
-              // UUID already confirmed before name arrived — confirm immediately.
-              confirm(device.id);
-            } else {
-              // Fallback: show this device after 3 s even if NUS UUID never arrives.
-              candidateTimers.set(
-                device.id,
-                setTimeout(() => confirm(device.id), CANDIDATE_FLUSH_MS),
-              );
-            }
+            candidateTimers.set(
+              device.id,
+              setTimeout(() => confirm(device.id), CANDIDATE_FLUSH_MS),
+            );
           }
 
-          // Phase 2: NUS UUID in scan response → confirm if name already known.
+          // Phase 2: UUID arrived after name was already in candidates → confirm.
           if (hasNUS) confirm(device.id);
         },
       );
@@ -592,7 +647,6 @@ class BleService implements ITransport {
       if (globalTimer !== null) clearTimeout(globalTimer);
       for (const t of candidateTimers.values()) clearTimeout(t);
       candidateTimers.clear();
-      uuidSeen.clear();
       mgr.stopDeviceScan();
     };
   }
