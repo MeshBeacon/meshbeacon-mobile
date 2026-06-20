@@ -27,6 +27,7 @@ import {
   Alert,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -76,6 +77,12 @@ export default function MapScreen() {
         (d): d is typeof d & { lat: number; lng: number } =>
           d.lat != null && d.lng != null,
       ),
+    [nearbyDucks],
+  );
+
+  // Ducks heard over LoRa but with no GPS fix yet
+  const ducksWithoutGps = useMemo(
+    () => nearbyDucks.filter((d) => d.lat == null || d.lng == null),
     [nearbyDucks],
   );
 
@@ -162,9 +169,9 @@ export default function MapScreen() {
           <View style={styles.headerLeft}>
             <MaterialIcons name="map" size={20} color="#f27f0d" />
             <Text style={styles.title}>Node Map</Text>
-            {ducksWithGps.length > 0 && (
+            {nearbyDucks.length > 0 && (
               <View style={styles.countPill}>
-                <Text style={styles.countText}>{ducksWithGps.length}</Text>
+                <Text style={styles.countText}>{nearbyDucks.length}</Text>
               </View>
             )}
           </View>
@@ -278,6 +285,43 @@ export default function MapScreen() {
               <MaterialIcons name="my-location" size={20} color="#f27f0d" />
             </Pressable>
           </View>
+
+          {/* ── No-GPS node chips bar ── */}
+          {ducksWithoutGps.length > 0 && (
+            <View style={styles.noGpsBar}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.noGpsScroll}
+              >
+                <View style={styles.noGpsLabel}>
+                  <MaterialIcons name="location-off" size={12} color="#8a7560" />
+                  <Text style={styles.noGpsLabelText}>No GPS</Text>
+                </View>
+                {ducksWithoutGps.map((duck) => (
+                  <Pressable
+                    key={duck.duckId}
+                    style={styles.noGpsChip}
+                    onPress={() =>
+                      router.push({
+                        pathname: "/chat/[peerId]" as any,
+                        params: { peerId: duck.duckId },
+                      })
+                    }
+                  >
+                    <View style={styles.noGpsAvatar}>
+                      <Text style={styles.noGpsAvatarText}>
+                        {duck.duckType[0]}
+                      </Text>
+                    </View>
+                    <Text style={styles.noGpsChipText} numberOfLines={1}>
+                      {duck.duckId}
+                    </Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            </View>
+          )}
 
           {/* ── No-GPS placeholder ── */}
           {ducksWithGps.length === 0 && mapReady && (
@@ -441,6 +485,58 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
   },
   fabAlt: { backgroundColor: "#fff", borderWidth: 1.5, borderColor: "#f27f0d" },
+
+  noGpsBar: {
+    position: "absolute",
+    left: 12,
+    bottom: 60,
+    right: 78, // leave room for FABs on the right
+  },
+  noGpsScroll: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 4,
+    paddingVertical: 4,
+  },
+  noGpsLabel: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    backgroundColor: "rgba(255,255,255,0.92)",
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderWidth: 1,
+    borderColor: "#e0d8d0",
+  },
+  noGpsLabelText: { fontSize: 10, fontWeight: "600", color: "#8a7560" },
+  noGpsChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: "rgba(255,255,255,0.92)",
+    borderRadius: 14,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderWidth: 1,
+    borderColor: "#e0d8d0",
+    elevation: 1,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 2,
+  },
+  noGpsAvatar: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: "#8a7560",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  noGpsAvatarText: { fontSize: 9, fontWeight: "700", color: "#fff" },
+  noGpsChipText: { fontSize: 11, fontWeight: "600", color: "#181411", maxWidth: 70 },
 
   emptyOverlay: {
     ...StyleSheet.absoluteFillObject,

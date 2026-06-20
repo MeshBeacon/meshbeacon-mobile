@@ -330,12 +330,17 @@ export default function ChatInboxScreen() {
                             <Text style={styles.nearbyTypeText}>{duck.duckType}</Text>
                           </View>
                         </View>
-                        {duck.lat != null && duck.lng != null && (
+                        {duck.lat != null && duck.lng != null ? (
                           <View style={styles.nearbyGpsRow}>
                             <MaterialIcons name="location-on" size={10} color="#22c55e" />
                             <Text style={styles.nearbyGpsText}>
                               {duck.lat.toFixed(5)}, {duck.lng.toFixed(5)}
                             </Text>
+                          </View>
+                        ) : (
+                          <View style={styles.nearbyNoGpsRow}>
+                            <MaterialIcons name="location-off" size={10} color="#b0a090" />
+                            <Text style={styles.nearbyNoGpsText}>No GPS</Text>
                           </View>
                         )}
                       </View>
@@ -804,6 +809,8 @@ const styles = StyleSheet.create({
   nearbyTypeText: { fontSize: 9, fontWeight: "700", color: "#15803d", letterSpacing: 0.5 },
   nearbyGpsRow: { flexDirection: "row", alignItems: "center", gap: 2, marginTop: 2 },
   nearbyGpsText: { fontSize: 9, color: "#22c55e", fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" },
+  nearbyNoGpsRow: { flexDirection: "row", alignItems: "center", gap: 2, marginTop: 2 },
+  nearbyNoGpsText: { fontSize: 9, color: "#b0a090", fontStyle: "italic" },
   nearbyEmpty: { paddingHorizontal: 16, paddingBottom: 8 },
   nearbyEmptyText: { fontSize: 12, color: "#a09080", fontStyle: "italic" },
 });
