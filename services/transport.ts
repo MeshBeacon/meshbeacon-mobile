@@ -98,6 +98,16 @@ export type MackFrame = {
  * The app should respond with CDK:GPS,LAT:<lat>,LNG:<lng>\n.
  * Occurs on boards with no built-in GPS module, or when the module has no fix.
  */
+/**
+ * Firmware confirms it dispatched a LoRa PING in response to CDK:SCAN.
+ * `status` is "ping_sent" (success) or "ping_failed" (NetworkState not PUBLIC).
+ */
+export type ScanAckFrame = {
+  type: "SCAN_ACK";
+  /** "ping_sent" | "ping_failed" */
+  status: string;
+  receivedAt: number;
+};
 export type GpsReqFrame = { type: "GPSREQ" };
 /**
  * Confirmation that the operator's system (OpenDMS) received the SOS.
@@ -143,6 +153,7 @@ export type IncomingFrame =
   | MackFrame
   | GpsReqFrame
   | SosAckFrame
+  | ScanAckFrame
   | SeenFrame
   | UnknownFrame;
 
@@ -267,6 +278,12 @@ export function parseIncomingLine(line: string): IncomingFrame | null {
         receivedAt: Date.now(),
       };
     }
+    case "SCAN_ACK":
+      return {
+        type: "SCAN_ACK",
+        status: fields["SCAN"] ?? "ping_sent",
+        receivedAt: Date.now(),
+      };
     case "GPSREQ":
       return { type: "GPSREQ" };
     case "SOS_ACK":

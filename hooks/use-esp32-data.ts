@@ -30,6 +30,7 @@ import type {
     MackFrame,
     MsgFrame,
     MTalkFrame,
+    ScanAckFrame,
     SeenFrame,
     SosAckFrame,
     StatusFrame,
@@ -193,6 +194,15 @@ export function useEsp32Data(): Esp32Data {
       if (frame.type === "SEEN") {
         const seen = frame as SeenFrame;
         if (seen.duckId) addSeen(seen.duckId, seen.duckType, seen.lat, seen.lng);
+      }
+      if (frame.type === "SCAN_ACK") {
+        // Firmware confirmed the scan. If the ping failed (not in PUBLIC
+        // network state), surface it as a STATUS field so the map/chat UI
+        // can warn the user.
+        const ack = frame as ScanAckFrame;
+        if (ack.status !== "ping_sent") {
+          dispatch({ type: "STATUS", fields: { SCAN: ack.status } } as StatusFrame);
+        }
       }
       if (frame.type === "MTALK") {
         const talk = frame as MTalkFrame;
