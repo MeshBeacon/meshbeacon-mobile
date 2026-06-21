@@ -58,15 +58,20 @@ function statusConfig(isBle: boolean) {
 
 interface Props {
   detail?: string;
+  /** When true, renders nothing while status is 'connected'. */
+  disconnectedOnly?: boolean;
 }
 
-export function SerialStatusBanner({ detail }: Props) {
+export function SerialStatusBanner({ detail, disconnectedOnly }: Props) {
   const { status, transportMode, setTransportMode, connect, disconnect } =
     useSerial();
   const isBle = transportMode === "ble";
   const cfg = statusConfig(isBle)[status];
   const showSpinner = status === "connecting" || status === "scanning";
   const isIdle = status === "disconnected" || status === "error";
+
+  // Option 3: hide the banner entirely when already connected.
+  if (disconnectedOnly && status === "connected") return null;
   const [showPicker, setShowPicker] = useState(false);
 
   const handleConnect = () => {

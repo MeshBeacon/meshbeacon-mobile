@@ -115,20 +115,28 @@ These frames are **sent by the mobile app** and received by the ESP32.
 Sent when the user taps the big red SOS button.
 
 ```
-CDK:SOS,LAT:<latitude>,LNG:<longitude>\n
+CDK:SOS,LAT:<latitude>,LNG:<longitude>[,ALT:<altitude>][,SPD:<speed>][,HDG:<heading>]\n
 ```
 
-| Field | Type                          | Example      | Notes                       |
-| ----- | ----------------------------- | ------------ | --------------------------- |
-| `LAT` | float string (6 dp) or `none` | `3.140000`   | `none` when GPS unavailable |
-| `LNG` | float string (6 dp) or `none` | `101.686000` | `none` when GPS unavailable |
+| Field | Type                          | Example      | Notes                                                |
+| ----- | ----------------------------- | ------------ | ---------------------------------------------------- |
+| `LAT` | float string (6 dp) or `none` | `3.140000`   | `none` when GPS unavailable                          |
+| `LNG` | float string (6 dp) or `none` | `101.686000` | `none` when GPS unavailable                          |
+| `ALT` | float string (1 dp), optional | `45.2`       | Altitude in metres; omitted when unavailable         |
+| `SPD` | float string (1 dp), optional | `35.5`       | Speed in **km/h**; omitted when unavailable          |
+| `HDG` | float string (1 dp), optional | `180.0`      | Heading in degrees (0–360); omitted when unavailable |
 
 Examples:
 
 ```
+CDK:SOS,LAT:3.140000,LNG:101.686000,ALT:45.2,SPD:35.5,HDG:180.0\n
 CDK:SOS,LAT:3.140000,LNG:101.686000\n
 CDK:SOS,LAT:none,LNG:none\n
 ```
+
+> **Speed units:** `expo-location` reports speed in m/s. The transport layer
+> converts to km/h (× 3.6) before building the frame, so the ESP32 always
+> receives km/h.
 
 #### Text Message
 
@@ -151,6 +159,40 @@ Examples:
 CDK:MSG,URGENCY:2,LAT:3.140000,LNG:101.686000,TEXT:Need medical help immediately\n
 CDK:MSG,URGENCY:0,LAT:none,LNG:none,TEXT:All clear; heading back to base\n
 ```
+
+#### GPS Location Reply
+
+Sent by the app in response to a `CDK:GPSREQ` frame from the ESP32 (see §2.3).
+The ESP32 uses this data to answer an operator GPS poll via LoRa.
+
+```
+CDK:GPS,LAT:<latitude>,LNG:<longitude>[,ALT:<altitude>][,SPD:<speed>][,HDG:<heading>]\n
+```
+
+| Field | Type                          | Example      | Notes                                                |
+| ----- | ----------------------------- | ------------ | ---------------------------------------------------- |
+| `LAT` | float string (6 dp) or `none` | `3.140000`   | `none` when GPS unavailable                          |
+| `LNG` | float string (6 dp) or `none` | `101.686000` | `none` when GPS unavailable                          |
+| `ALT` | float string (1 dp), optional | `45.2`       | Altitude in metres; omitted when unavailable         |
+| `SPD` | float string (1 dp), optional | `35.5`       | Speed in **km/h**; omitted when unavailable          |
+| `HDG` | float string (1 dp), optional | `180.0`      | Heading in degrees (0–360); omitted when unavailable |
+
+Examples:
+
+```
+CDK:GPS,LAT:3.140000,LNG:101.686000,ALT:45.2,SPD:5.3,HDG:270.0\n
+CDK:GPS,LAT:3.140000,LNG:101.686000\n
+CDK:GPS,LAT:none,LNG:none\n
+```
+
+The app auto-responds within 5 seconds of receiving `CDK:GPSREQ`. ALT/SPD/HDG
+are included whenever `expo-location` provides them. If GPS permission is denied
+or a fix is unavailable before the 5-second deadline, `LAT:none,LNG:none` is
+sent so the firmware can record a FIX:0 entry rather than waiting indefinitely.
+
+> **Speed units:** Same convention as the SOS frame — km/h (m/s × 3.6).
+
+---
 
 #### PING — Device ID Request
 
@@ -398,6 +440,21 @@ CDK:MTALK,LAT:3.140005,LNG:101.686010,TEXT:📍
 
 ---
 
+#### GPS Location Request ← **app must respond with `CDK:GPS`**
+
+Sent by the ESP32 when it receives an operator GPS poll (LoRa topic 0xEA / 234)
+and no hardware GPS fix is available. The app should reply with a `CDK:GPS`
+frame (§2.2) as soon as possible.
+
+```
+CDK:GPSREQ\n
+```
+
+No fields. The app has up to **5 seconds** to respond before the firmware
+reports a FIX:0 entry to the mesh.
+
+---
+
 #### Device Button SOS ← **triggers local notification**
 
 Sent by the ESP32 when the **hardware SOS button** is pressed (distinct from an
@@ -405,26 +462,45 @@ app-originated SOS). The app displays a local notification and logs the event
 in `deviceSosAlerts`.
 
 ```
-CDK:SOS,SRC:DEVICE,ID:<deviceId>,LAT:<latitude>,LNG:<longitude>\n
+CDK:SOS,SRC:DEVICE,ID:<deviceId>,LAT:<latitude>,LNG:<longitude>[,ALT:<altitude>][,SPD:<speed>][,HDG:<heading>][,GPS:PHONE],BATT:<battery>\n
 ```
 
-| Field | Type   | Example    | Notes                                                                            |
-| ----- | ------ | ---------- | -------------------------------------------------------------------------------- |
-| `SRC` | string | `DEVICE`   | Always `DEVICE` for hardware-button origin; app SOS frames never have this field |
-| `ID`  | string | `ZAIHAN12` | Duck name / device identifier                                                    |
-| `LAT` | string | `none`     | GPS not typically available at firmware level; usually `none`                    |
-| `LNG` | string | `none`     | same as above                                                                    |
+| Field  | Type                          | Example                | Notes                                                                                                                                      |
+| ------ | ----------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `SRC`  | string                        | `DEVICE`               | Always `DEVICE` for hardware-button origin; app SOS frames never have this field                                                           |
+| `ID`   | string                        | `ZAIHAN12`             | Duck name / device identifier                                                                                                              |
+| `LAT`  | string                        | `3.140000` or `none`   | Hardware GPS or cached phone GPS; `none` if neither available                                                                              |
+| `LNG`  | string                        | `101.686000` or `none` | Same source as `LAT`                                                                                                                       |
+| `ALT`  | float string (1 dp), optional | `45.2`                 | Present when GPS source provides altitude                                                                                                  |
+| `SPD`  | float string (1 dp), optional | `35.5`                 | Speed in **km/h**; present when GPS source provides it                                                                                     |
+| `HDG`  | float string (1 dp), optional | `180.0`                | Heading in degrees; present when GPS source provides it                                                                                    |
+| `GPS`  | string, optional              | `PHONE`                | Present only when coordinates came from phone GPS fallback (no on-board GPS module or no satellite fix); absent when hardware GPS was used |
+| `BATT` | integer                       | `82`                   | Device battery percentage at time of press                                                                                                 |
 
-Example:
+Examples:
 
 ```
-CDK:SOS,SRC:DEVICE,ID:ZAIHAN12,LAT:none,LNG:none\n
+# Device with hardware GPS fix (satellite)
+CDK:SOS,SRC:DEVICE,ID:ZAIHAN12,LAT:3.140000,LNG:101.686000,ALT:45.2,SPD:3.1,HDG:270.0,BATT:82\n
+
+# Device without GPS module, phone connected (GPS:PHONE fallback)
+CDK:SOS,SRC:DEVICE,ID:ZAIHAN12,LAT:3.140000,LNG:101.686000,GPS:PHONE,BATT:75\n
+
+# No GPS available at all
+CDK:SOS,SRC:DEVICE,ID:ZAIHAN12,LAT:none,LNG:none,BATT:61\n
 ```
 
 The corresponding LoRa payload broadcast by the firmware:
 
 ```
-SOS,SRC:DEVICE,ID:ZAIHAN12
+# With full telemetry (satellite GPS)
+SOS,SRC:DEVICE,ID:ZAIHAN12,LAT:3.140000,LNG:101.686000,ALT:45.2,SPD:3.1,HDG:270.0,BATT:82
+
+# Phone GPS fallback (GPS:PHONE marker included)
+SOS,SRC:DEVICE,ID:ZAIHAN12,LAT:3.140000,LNG:101.686000,GPS:PHONE,BATT:75
+
+# No GPS
+SOS,SRC:DEVICE,ID:ZAIHAN12,BATT:61
 ```
 
 > **Disambiguation:** App-originated SOS frames sent _to_ the ESP32 (§2.2) do
@@ -1321,15 +1397,33 @@ Permissions are requested inside `useMessageNotifications` via
 The physical hardware SOS button on the ESP32 board calls `sendEmergency()` in
 the firmware. This is distinct from an app-originated SOS (§2.2).
 
-### Firmware Behaviour
+### Firmware Behaviour — GPS Source Priority
 
-1. On button press, `sendEmergency()` broadcasts over LoRa:
+When the button is held for 2 seconds the firmware resolves the best available
+GPS source before calling `sendEmergency()`:
+
+| Priority     | Source                            | Condition                                                                      |
+| ------------ | --------------------------------- | ------------------------------------------------------------------------------ |
+| 1 (best)     | **Hardware GPS module** (V4 only) | `tinyGps.location.isValid()` and age < 5 s                                     |
+| 2            | **Cached phone GPS**              | Phone connected via BLE or USB _and_ a `CDK:GPS` reply was previously received |
+| 3 (fallback) | **None**                          | No fix from either source — coordinates omitted from payload                   |
+
+Phone GPS is cached each time the app responds to a `CDK:GPSREQ` (periodic
+operator polls). By the time an SOS is triggered the cache is typically fresh.
+
+### Firmware Behaviour — Payload Construction
+
+1. `sendEmergency(lat, lng, alt, spd, hdg)` builds the LoRa payload:
    ```
-   SOS,SRC:DEVICE,ID:ZAIHAN12
+   SOS,SRC:DEVICE,ID:ZAIHAN12,LAT:3.140000,LNG:101.686000,ALT:45.2,SPD:3.1,HDG:270.0,BATT:82
+   ```
+   Coordinates and telemetry fields are omitted when not available:
+   ```
+   SOS,SRC:DEVICE,ID:ZAIHAN12,BATT:61
    ```
 2. Simultaneously broadcasts over all connected channels (USB + BLE):
    ```
-   CDK:SOS,SRC:DEVICE,ID:ZAIHAN12,LAT:none,LNG:none\n
+   CDK:SOS,SRC:DEVICE,ID:ZAIHAN12,LAT:3.140000,LNG:101.686000,ALT:45.2,SPD:3.1,HDG:270.0,BATT:82\n
    ```
 
 ### App Behaviour
@@ -1355,11 +1449,22 @@ case "SOS": {
 
 ### LoRa Payload Design
 
-The compact payload `SOS,SRC:DEVICE,ID:ZAIHAN12` is chosen to:
+The payload `SOS,SRC:DEVICE,ID:ZAIHAN12[,LAT:…,LNG:…][,ALT:…][,SPD:…][,HDG:…],BATT:…` is designed to:
 
 - Remain under the LoRa mesh packet size limit.
 - Be parseable by other Ducks in the network without CDK-specific logic.
 - Distinguish hardware-button SOS from app-originated SOS for analytics.
+- Include full location telemetry (altitude, speed, heading) when available,
+  sourced from either the on-board GPS module or the connected phone.
+
+### GPS Fallback — How Phone GPS Is Cached
+
+The firmware auto-caches the last valid phone GPS response in global buffers
+(`phoneGpsLatBuf`, `phoneGpsLngBuf`, `phoneGpsAltBuf`, `phoneGpsSpdBuf`,
+`phoneGpsHdgBuf`). These are populated every time `handleGps()` processes a
+`CDK:GPS` reply — which happens on every operator GPS poll. On a device without
+a hardware GPS module, the SOS button therefore always has access to the most
+recently polled phone coordinates.
 
 ---
 

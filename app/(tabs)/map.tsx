@@ -37,6 +37,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocationCtx } from "@/contexts/location-context";
 import { useNearbyDucksCtx } from "@/contexts/nearby-ducks-context";
 import { useSerial } from "@/contexts/serial-context";
+import { SerialStatusBanner } from "@/components/serial-status-banner";
 
 // ── Map style ─────────────────────────────────────────────────────────────────
 // OpenFreeMap Liberty — vector tiles, no API key required, OSM-based.
@@ -200,6 +201,9 @@ export default function MapScreen() {
             </Pressable>
           </View>
         </View>
+
+        {/* ── Connection warning (only shown when disconnected) ── */}
+        <SerialStatusBanner disconnectedOnly />
 
         {/* ── Map ── */}
         <View style={styles.mapWrap}>

@@ -238,7 +238,11 @@ export function useEsp32Data(): Esp32Data {
         frame.type === "SOS" &&
         (frame as DeviceSosFrame).source === "DEVICE"
       ) {
-        notifyDeviceSOS((frame as DeviceSosFrame).deviceId);
+        // Use the ID from the SOS frame if present; fall back to the duck name
+        // from the CDK:ID announce (state.deviceId) so the notification still
+        // shows a meaningful name even after we removed ID: from the payload.
+        const sosDeviceId = (frame as DeviceSosFrame).deviceId || state.deviceId || "ESP32";
+        notifyDeviceSOS(sosDeviceId);
       }
       if (frame.type === "SOS_ACK") {
         notifySosAck();

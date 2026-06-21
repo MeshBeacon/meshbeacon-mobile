@@ -40,6 +40,8 @@ export function useNearbyDucks() {
   const addSeen = useCallback(
     (duckId: string, duckType: string, lat?: number, lng?: number) => {
       if (!duckId || duckId.trim().length === 0) return;
+      // PapaDucks are gateway infrastructure — exclude from the nearby nodes list.
+      if (duckType === "PAPA") return;
       const existing = mapRef.current.get(duckId);
       mapRef.current.set(duckId, {
         duckId,
