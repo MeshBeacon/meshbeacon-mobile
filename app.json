@@ -10,7 +10,7 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.taqisystems.clusterduck",
+      "bundleIdentifier": "com.meshbeacon.clusterduck",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
