@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "RescueLink",
+    "name": "MeshBeacon",
     "slug": "ClusterDuck",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -24,7 +24,7 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.taqisystems.clusterduck",
+      "package": "org.meshbeacon.clusterduck",
       "permissions": [
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_FINE_LOCATION",

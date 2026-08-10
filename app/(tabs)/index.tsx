@@ -95,7 +95,7 @@ export default function HomeScreen() {
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
       <View style={styles.container}>
         <View style={styles.header}>
-          <Text style={styles.headerTitle}>RescueLink</Text>
+          <Text style={styles.headerTitle}>MeshBeacon</Text>
           <Pressable
             style={styles.newMessageBtn}
             onPress={() => router.push("/(tabs)/messages")}
@@ -397,20 +397,6 @@ export default function HomeScreen() {
             </View>
             <MaterialIcons name="chevron-right" size={22} color="#c8bdb0" />
           </Pressable>
-
-          {/* Protocol info */}
-          <View style={styles.infoCard}>
-            <MaterialIcons name="info" size={18} color="#f27f0d" />
-            <Text style={styles.infoText}>
-              {"SOS frame: "}
-              <Text style={styles.mono}>{"CDK:SOS,LAT:<lat>,LNG:<lng>"}</Text>
-              {"\nMessage frame: "}
-              <Text style={styles.mono}>
-                {"CDK:MSG,URGENCY:<level>,LAT:<lat>,LNG:<lng>,TEXT:<text>"}
-              </Text>
-              {"\nNewline-terminated at 115200 baud."}
-            </Text>
-          </View>
         </ScrollView>
       </View>
     </SafeAreaView>
@@ -568,17 +554,6 @@ const styles = StyleSheet.create({
   actionTexts: { flex: 1, gap: 2 },
   actionTitle: { fontSize: 15, fontWeight: "700", color: "#181411" },
   actionSub: { fontSize: 12, color: "#8a7560" },
-  infoCard: {
-    flexDirection: "row",
-    gap: 10,
-    padding: 12,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: "#ffedd5",
-    backgroundColor: "#fff7ed",
-  },
-  infoText: { flex: 1, fontSize: 12, color: "#9a3412", lineHeight: 18 },
-  mono: { fontFamily: "monospace", fontSize: 11 },
   // Incoming LoRa messages card
   incomingCard: {
     borderWidth: 1,
