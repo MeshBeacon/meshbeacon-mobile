@@ -1,12 +1,11 @@
 /**
  * useSettingsStore
  *
- * Persists emergency profile and emergency contacts to AsyncStorage so data
- * survives app restarts.  On first launch, sensible empty defaults are used
- * instead of hard-coded demo data.
+ * Persists emergency contacts to AsyncStorage so data survives app restarts.
+ * On first launch, an empty list is used instead of hard-coded demo data.
  *
  * Storage key: "cdk-settings"
- *   { profile: ProfileInfo, contacts: Contact[] }
+ *   { contacts: Contact[] }
  */
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -22,22 +21,9 @@ export type Contact = {
   isPrimary: boolean;
 };
 
-export type ProfileInfo = {
-  name: string;
-  bloodType: string;
-  allergies: string;
-};
-
 interface StorageFormat {
-  profile: ProfileInfo;
   contacts: Contact[];
 }
-
-const DEFAULT_PROFILE: ProfileInfo = {
-  name: "",
-  bloodType: "O Positive",
-  allergies: "",
-};
 
 const DEFAULT_CONTACTS: Contact[] = [];
 
@@ -48,7 +34,7 @@ async function loadStorage(): Promise<StorageFormat> {
   } catch {
     // Fall through to defaults
   }
-  return { profile: DEFAULT_PROFILE, contacts: DEFAULT_CONTACTS };
+  return { contacts: DEFAULT_CONTACTS };
 }
 
 async function persist(data: StorageFormat): Promise<void> {
@@ -60,14 +46,12 @@ async function persist(data: StorageFormat): Promise<void> {
 }
 
 export function useSettingsStore() {
-  const [profile, setProfileState] = useState<ProfileInfo>(DEFAULT_PROFILE);
   const [contacts, setContactsState] = useState<Contact[]>(DEFAULT_CONTACTS);
   const [loaded, setLoaded] = useState(false);
 
   // Hydrate from disk on mount
   useEffect(() => {
     loadStorage().then((data) => {
-      setProfileState(data.profile);
       setContactsState(data.contacts);
       setLoaded(true);
     });
@@ -75,12 +59,8 @@ export function useSettingsStore() {
 
   // Persist on every change (skip before hydration to avoid overwriting data)
   useEffect(() => {
-    if (loaded) persist({ profile, contacts });
-  }, [profile, contacts, loaded]);
-
-  const setProfile = useCallback((p: ProfileInfo) => {
-    setProfileState(p);
-  }, []);
+    if (loaded) persist({ contacts });
+  }, [contacts, loaded]);
 
   const setContacts = useCallback(
     (updater: Contact[] | ((prev: Contact[]) => Contact[])) => {
@@ -89,5 +69,5 @@ export function useSettingsStore() {
     [],
   );
 
-  return { profile, setProfile, contacts, setContacts, loaded };
+  return { contacts, setContacts, loaded };
 }

@@ -356,6 +356,15 @@ class SerialService implements ITransport {
   async sendScan(): Promise<void> {
     await this.sendRaw("CDK:SCAN");
   }
+
+  /** Query (no code) or set (code) the device's LoRa region. See ITransport. */
+  async sendRadioRegion(code?: string): Promise<void> {
+    await this.sendRaw(
+      code
+        ? `${FRAME_SOURCE}:RADIOREGION,VALUE:${code}`
+        : `${FRAME_SOURCE}:RADIOREGION`,
+    );
+  }
 }
 
 export const serialService = new SerialService();

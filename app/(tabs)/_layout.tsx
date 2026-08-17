@@ -57,7 +57,6 @@ export default function TabLayout() {
         name="settings"
         options={{
           title: "Settings",
-          href: null,
           tabBarIcon: ({ color, size }) => (
             <MaterialIcons name="settings" size={size} color={color} />
           ),

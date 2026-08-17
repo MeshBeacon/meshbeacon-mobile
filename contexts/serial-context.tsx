@@ -5,6 +5,7 @@ import {
     type TransportStatus,
 } from "@/services";
 import { bleService } from "@/services/ble";
+import type { RadioRegionFrame } from "@/services/transport";
 import React, {
     createContext,
     useCallback,
@@ -50,6 +51,10 @@ interface SerialContextValue {
   }) => Promise<void>;
   /** Broadcast a LoRa PING so nearby ducks respond and appear in the Nearby list. */
   sendScan: () => Promise<void>;
+  /** Query (no code) or set (code) the device's LoRa region preset. */
+  sendRadioRegion: (code?: string) => Promise<void>;
+  /** Latest CDK:RADIOREGION reply from the device (query result or write ack). */
+  radioRegion: RadioRegionFrame | null;
 }
 
 const SerialContext = createContext<SerialContextValue>({
@@ -64,6 +69,8 @@ const SerialContext = createContext<SerialContextValue>({
   sendMTalk: async () => {},
   sendGps: async () => {},
   sendScan: async () => {},
+  sendRadioRegion: async () => {},
+  radioRegion: null,
 });
 
 export function SerialProvider({ children }: { children: React.ReactNode }) {
@@ -135,6 +142,23 @@ export function SerialProvider({ children }: { children: React.ReactNode }) {
     () => serviceForMode(mode).sendScan(),
     [mode],
   );
+  const sendRadioRegion = useCallback(
+    (code?: string) => serviceForMode(mode).sendRadioRegion(code),
+    [mode],
+  );
+
+  const [radioRegion, setRadioRegion] = useState<RadioRegionFrame | null>(
+    null,
+  );
+  useEffect(() => {
+    if (status === "disconnected") setRadioRegion(null);
+  }, [status]);
+  useEffect(() => {
+    return serviceForMode(mode).onFrameReceived((frame) => {
+      if (frame.type !== "RADIOREGION") return;
+      setRadioRegion(frame as RadioRegionFrame);
+    });
+  }, [mode]);
 
   // Auto-respond to GPSREQ frames from the ESP32 with the phone's GPS coords.
   const gps = useLocationCtx();
@@ -199,6 +223,8 @@ export function SerialProvider({ children }: { children: React.ReactNode }) {
         sendMTalk,
         sendGps,
         sendScan,
+        sendRadioRegion,
+        radioRegion,
       }}
     >
       {children}

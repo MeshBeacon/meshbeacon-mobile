@@ -119,6 +119,33 @@ export type SosAckFrame = {
   receivedAt: number;
 };
 /**
+ * Reply to CDK:RADIOREGION — sent by the firmware either in response to a
+ * query (no VALUE sent by the app) or after a write.  A successful write
+ * always sets `rebootRequired: true`; the new region is not applied until the
+ * device reboots.  `error` is present only when a write was rejected.
+ */
+export type RadioRegionFrame = {
+  type: "RADIOREGION";
+  /** Region code, e.g. "MY", "US". Present on query replies and write acks. */
+  value?: string;
+  /** "ok" on a successful write. */
+  status?: string;
+  /** True when a region was just written and the device must reboot to apply it. */
+  rebootRequired?: boolean;
+  /** "unknown_region" | "write_failed" — present only when a write was rejected. */
+  error?: string;
+};
+
+/** LoRa region presets supported by the firmware, for use in region-picker UI. */
+export const RADIO_REGIONS: { code: string; label: string }[] = [
+  { code: "MY", label: "Malaysia" },
+  { code: "SG", label: "Singapore" },
+  { code: "PH", label: "Philippines" },
+  { code: "ID", label: "Indonesia" },
+  { code: "US", label: "United States" },
+  { code: "UK", label: "United Kingdom" },
+];
+/**
  * Emitted by the firmware whenever it receives a packet from another duck.
  * Used by the app to populate the Nearby Ducks list in the Nearby screen.
  *
@@ -155,6 +182,7 @@ export type IncomingFrame =
   | SosAckFrame
   | ScanAckFrame
   | SeenFrame
+  | RadioRegionFrame
   | UnknownFrame;
 
 export type FrameCallback = (frame: IncomingFrame) => void;
@@ -292,6 +320,14 @@ export function parseIncomingLine(line: string): IncomingFrame | null {
         text: fields["TEXT"] ?? rest,
         receivedAt: Date.now(),
       };
+    case "RADIOREGION":
+      return {
+        type: "RADIOREGION",
+        ...(fields["VALUE"] ? { value: fields["VALUE"] } : {}),
+        ...(fields["STATUS"] ? { status: fields["STATUS"] } : {}),
+        ...(fields["REBOOT_REQUIRED"] === "1" ? { rebootRequired: true } : {}),
+        ...(fields["ERROR"] ? { error: fields["ERROR"] } : {}),
+      };
   }
 
   return { type, raw: trimmed };
@@ -382,4 +418,12 @@ export interface ITransport {
   }): Promise<void>;
   /** Broadcast a LoRa PING so nearby ducks respond and appear in the Nearby list. */
   sendScan(): Promise<void>;
+
+  /**
+   * Query or change the device's LoRa region preset.
+   * Omit `code` to query the current region. The device replies with a
+   * CDK:RADIOREGION frame (see RadioRegionFrame). A successful write requires
+   * a device reboot before the new region actually takes effect.
+   */
+  sendRadioRegion(code?: string): Promise<void>;
 }

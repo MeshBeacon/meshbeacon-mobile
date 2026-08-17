@@ -244,6 +244,32 @@ addresses it to the target duck's DUID derived from `TARGET`.
 
 ---
 
+#### LoRa Region — Query / Set
+
+Sent by the Settings screen to read or change the device's LoRa frequency
+preset. Available over **both** USB serial and BLE. Omit `VALUE` to query the
+current region; include it to write a new one.
+
+```
+CDK:RADIOREGION[,VALUE:<code>]\n
+```
+
+| Field   | Values                             | Notes                                    |
+| ------- | ---------------------------------- | ----------------------------------------- |
+| `VALUE` | `MY` \| `SG` \| `PH` \| `ID` \| `US` \| `UK`, optional | Omit to query; include to write a new region |
+
+Examples:
+
+```
+CDK:RADIOREGION\n
+CDK:RADIOREGION,VALUE:SG\n
+```
+
+The ESP32 replies with a `CDK:RADIOREGION` frame (§2.3). **Writing a new
+region does not retune the radio immediately** — the device must be rebooted
+(power cycled) before the change takes effect. The Settings screen shows a
+persistent notice to that effect after a successful write.
+
 ### 2.3 ESP32 → App Frames
 
 These frames are **sent by the ESP32** and received by the mobile app. They
@@ -506,6 +532,38 @@ SOS,SRC:DEVICE,ID:ZAIHAN12,BATT:61
 > **Disambiguation:** App-originated SOS frames sent _to_ the ESP32 (§2.2) do
 > not have a `SRC` field. The `SRC:DEVICE` field is exclusively present in
 > firmware-originated frames sent _to_ the app.
+
+---
+
+#### LoRa Region — Query / Write Reply
+
+Sent by the ESP32 in response to a `CDK:RADIOREGION` request from the app
+(§2.2), whether it was a query (no `VALUE`) or a write.
+
+```
+CDK:RADIOREGION,VALUE:<code>[,STATUS:ok,REBOOT_REQUIRED:1]\n
+CDK:RADIOREGION,ERROR:<reason>\n
+```
+
+| Field              | Type                        | Notes                                                          |
+| ------------------ | ---------------------------- | --------------------------------------------------------------- |
+| `VALUE`             | region code                  | The current (query) or newly-written region                     |
+| `STATUS`             | `ok`, optional               | Present after a successful write                                 |
+| `REBOOT_REQUIRED`    | `1`, optional                | Present after a successful write — device must reboot to apply  |
+| `ERROR`              | `unknown_region` \| `write_failed`, optional | Present only when a write was rejected |
+
+Examples:
+
+```
+CDK:RADIOREGION,VALUE:MY\n
+CDK:RADIOREGION,VALUE:SG,STATUS:ok,REBOOT_REQUIRED:1\n
+CDK:RADIOREGION,ERROR:unknown_region\n
+```
+
+The app parses this into a `RadioRegionFrame` (`services/transport.ts`) and
+exposes the latest reply via `useSerial().radioRegion`. The Settings screen
+queries the current region once on connect, lets the user pick a new preset,
+and shows a reboot-required banner after a successful write.
 
 ---
 
