@@ -304,7 +304,16 @@ export default function ChatThreadScreen() {
               contentContainerStyle={styles.list}
               showsVerticalScrollIndicator={false}
               onContentSizeChange={() => {
-                if (keyboardVisible.current) {
+                // On the very first layout pass after navigating into a
+                // thread, the ScrollView's content height isn't known yet
+                // when the mount-time scrollToEnd() (below) fires, so that
+                // call can be a no-op during slower navigation transitions.
+                // This fires reliably once real content height is measured,
+                // so use it to guarantee the initial landing position.
+                if (!initialScrollDone.current) {
+                  scrollRef.current?.scrollToEnd({ animated: false });
+                  initialScrollDone.current = true;
+                } else if (keyboardVisible.current) {
                   scrollRef.current?.scrollToEnd({ animated: true });
                 }
               }}
