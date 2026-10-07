@@ -144,6 +144,7 @@ export const RADIO_REGIONS: { code: string; label: string }[] = [
   { code: "ID", label: "Indonesia" },
   { code: "US", label: "United States" },
   { code: "UK", label: "United Kingdom" },
+  { code: "PSE", label: "Palestine" },
 ];
 /**
  * Emitted by the firmware whenever it receives a packet from another duck.

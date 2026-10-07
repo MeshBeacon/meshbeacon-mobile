@@ -25,6 +25,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Platform,
   Pressable,
   ScrollView,
@@ -34,15 +35,21 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { useEsp32DataCtx } from "@/contexts/esp32-data-context";
 import { useLocationCtx } from "@/contexts/location-context";
 import { useNearbyDucksCtx } from "@/contexts/nearby-ducks-context";
 import { useSerial } from "@/contexts/serial-context";
 import { SerialStatusBanner } from "@/components/serial-status-banner";
 
+const MESHBEACON_LOGO = require("@/assets/images/logo.png");
+
 // ── Map style ─────────────────────────────────────────────────────────────────
 // OpenFreeMap Liberty — vector tiles, no API key required, OSM-based.
 const MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
 const OFFLINE_PACK_NAME = "cdp_area_v1";
+// How long the connected device's marker lingers (dimmed) after a disconnect
+// before it's removed from the map entirely.
+const SELF_MARKER_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 // OfflineManager is a shared singleton exported from MapLibre.
 // It is NOT a constructor — call its methods directly.
@@ -59,8 +66,11 @@ interface SelectedDuck {
 export default function MapScreen() {
   const router = useRouter();
   const { nearbyDucks } = useNearbyDucksCtx();
-  const { sendScan, status } = useSerial();
+  const { sendScan, status, transportMode } = useSerial();
+  const { deviceId } = useEsp32DataCtx();
   const gpsState = useLocationCtx();
+
+  const connectionIcon = transportMode === "ble" ? "bluetooth" : "usb";
 
   const mapRef = useRef<MapRef>(null);
   const cameraRef = useRef<CameraRef>(null);
@@ -70,22 +80,6 @@ export default function MapScreen() {
   const [downloading, setDownloading] = useState(false);
   const [offlineReady, setOfflineReady] = useState(false);
   const [selected, setSelected] = useState<SelectedDuck | null>(null);
-
-  // Only ducks that have a confirmed GPS fix
-  const ducksWithGps = useMemo(
-    () =>
-      nearbyDucks.filter(
-        (d): d is typeof d & { lat: number; lng: number } =>
-          d.lat != null && d.lng != null,
-      ),
-    [nearbyDucks],
-  );
-
-  // Ducks heard over LoRa but with no GPS fix yet
-  const ducksWithoutGps = useMemo(
-    () => nearbyDucks.filter((d) => d.lat == null || d.lng == null),
-    [nearbyDucks],
-  );
 
   // Check for an existing offline pack on mount
   useEffect(() => {
@@ -99,23 +93,94 @@ export default function MapScreen() {
       ? [gpsState.coords.longitude, gpsState.coords.latitude]
       : null;
 
+  // Last known position of the device this phone was connected to, kept
+  // around for SELF_MARKER_TTL_MS after a disconnect so the marker fades
+  // out instead of vanishing the instant the link drops.
+  const [lastKnownSelf, setLastKnownSelf] = useState<
+    { duckId: string; lng: number; lat: number; at: number } | null
+  >(null);
+
+  useEffect(() => {
+    if (status === "connected" && deviceId && userLngLat) {
+      setLastKnownSelf({
+        duckId: deviceId,
+        lng: userLngLat[0],
+        lat: userLngLat[1],
+        at: Date.now(),
+      });
+    }
+  }, [status, deviceId, userLngLat]);
+
+  // Evict the stale "last known" marker once it goes past the TTL.
+  useEffect(() => {
+    const id = setInterval(() => {
+      setLastKnownSelf((prev) =>
+        prev && Date.now() - prev.at >= SELF_MARKER_TTL_MS ? null : prev,
+      );
+    }, 30_000);
+    return () => clearInterval(id);
+  }, []);
+
+  // The connected device's own marker: a live position while connected, or
+  // a dimmed "last known" position for a short time after it disconnects.
+  const selfMarker = useMemo(() => {
+    const isConnected = status === "connected" && !!deviceId;
+    if (isConnected && userLngLat) {
+      return {
+        duckId: deviceId!,
+        lng: userLngLat[0],
+        lat: userLngLat[1],
+        connected: true as const,
+        at: Date.now(),
+      };
+    }
+    if (isConnected && lastKnownSelf?.duckId === deviceId) {
+      return { ...lastKnownSelf, connected: true as const };
+    }
+    if (!isConnected && lastKnownSelf) {
+      return { ...lastKnownSelf, connected: false as const };
+    }
+    return null;
+  }, [status, deviceId, userLngLat, lastKnownSelf]);
+
+  // Mesh-discovered ducks, excluding the connected device itself — that one
+  // is always rendered via `selfMarker` instead, so it never duplicates.
+  const otherDucks = useMemo(
+    () => nearbyDucks.filter((d) => d.duckId !== selfMarker?.duckId),
+    [nearbyDucks, selfMarker],
+  );
+
+  // Only ducks that have a confirmed GPS fix
+  const ducksWithGps = useMemo(
+    () =>
+      otherDucks.filter(
+        (d): d is typeof d & { lat: number; lng: number } =>
+          d.lat != null && d.lng != null,
+      ),
+    [otherDucks],
+  );
+
+  // Ducks heard over LoRa but with no GPS fix yet
+  const ducksWithoutGps = useMemo(
+    () => otherDucks.filter((d) => d.lat == null || d.lng == null),
+    [otherDucks],
+  );
+
   const centreOnUser = useCallback(() => {
     if (!userLngLat) return;
     cameraRef.current?.flyTo({ center: userLngLat, zoom: 14, duration: 600 });
   }, [userLngLat]);
 
   const centreOnDucks = useCallback(() => {
-    if (ducksWithGps.length === 0) return;
-    if (ducksWithGps.length === 1) {
-      cameraRef.current?.flyTo({
-        center: [ducksWithGps[0].lng, ducksWithGps[0].lat],
-        zoom: 14,
-        duration: 600,
-      });
+    const points = ducksWithGps.map((d) => [d.lng, d.lat] as [number, number]);
+    if (selfMarker) points.push([selfMarker.lng, selfMarker.lat]);
+    if (points.length === 0) return;
+    if (points.length === 1) {
+      cameraRef.current?.flyTo({ center: points[0], zoom: 14, duration: 600 });
       return;
     }
-    const lngs = ducksWithGps.map((d) => d.lng);
-    const lats = ducksWithGps.map((d) => d.lat);
+    const lngs = points.map((p) => p[0]);
+    const lats = points.map((p) => p[1]);
     if (userLngLat) { lngs.push(userLngLat[0]); lats.push(userLngLat[1]); }
     const pad = 0.004;
     cameraRef.current?.fitBounds(
@@ -123,7 +188,7 @@ export default function MapScreen() {
        Math.max(...lngs) + pad, Math.max(...lats) + pad],
       { duration: 600 },
     );
-  }, [ducksWithGps, userLngLat]);
+  }, [ducksWithGps, selfMarker, userLngLat]);
 
   const handleScan = useCallback(async () => {
     if (status !== "connected" || scanning) return;
@@ -226,7 +291,8 @@ export default function MapScreen() {
 
             <UserLocation animated accuracy heading />
 
-            {/* One Marker per duck that has a GPS fix */}
+            {/* One Marker per duck that has a GPS fix (excludes the connected
+                device itself, which is rendered separately below) */}
             {ducksWithGps.map((duck) => (
               <Marker
                 key={duck.duckId}
@@ -253,6 +319,60 @@ export default function MapScreen() {
                 </View>
               </Marker>
             ))}
+
+            {/* Branded marker for the device this phone is connected to over
+                BLE/USB. Stays dimmed with its last known position for a short
+                time after a disconnect, then disappears once it goes stale. */}
+            {selfMarker && (
+              <Marker
+                key="SELF_MARKER"
+                lngLat={[selfMarker.lng, selfMarker.lat]}
+                anchor="bottom"
+                onPress={() =>
+                  setSelected({
+                    duckId: selfMarker.duckId,
+                    duckType: "ME",
+                    lat: selfMarker.lat,
+                    lng: selfMarker.lng,
+                  })
+                }
+              >
+                <View
+                  style={[
+                    styles.markerWrap,
+                    !selfMarker.connected && styles.markerFaded,
+                  ]}
+                >
+                  <View style={styles.markerBadgeAnchor}>
+                    <View style={[styles.marker, styles.markerConnected]}>
+                      <Image
+                        source={MESHBEACON_LOGO}
+                        style={styles.markerLogo}
+                        resizeMode="contain"
+                      />
+                    </View>
+                    <View
+                      style={[
+                        styles.markerConnBadge,
+                        !selfMarker.connected && styles.markerConnBadgeOffline,
+                      ]}
+                    >
+                      <MaterialIcons
+                        name={selfMarker.connected ? connectionIcon : "cloud-off"}
+                        size={9}
+                        color="#fff"
+                      />
+                    </View>
+                  </View>
+                  <Text style={styles.markerLabel} numberOfLines={1}>
+                    {selfMarker.connected ? selfMarker.duckId : "Last seen"}
+                  </Text>
+                  <View
+                    style={[styles.markerStem, styles.markerStemConnected]}
+                  />
+                </View>
+              </Marker>
+            )}
           </Map>
 
           {/* ── FAB column ── */}
@@ -274,7 +394,7 @@ export default function MapScreen() {
             </Pressable>
 
             {/* Fit all ducks in viewport */}
-            {ducksWithGps.length > 0 && (
+            {(ducksWithGps.length > 0 || selfMarker) && (
               <Pressable style={styles.fab} onPress={centreOnDucks}>
                 <MaterialIcons name="zoom-out-map" size={20} color="#fff" />
               </Pressable>
@@ -328,7 +448,7 @@ export default function MapScreen() {
           )}
 
           {/* ── No-GPS placeholder ── */}
-          {ducksWithGps.length === 0 && mapReady && (
+          {ducksWithGps.length === 0 && !selfMarker && mapReady && (
             <View style={styles.emptyOverlay} pointerEvents="none">
               <View style={styles.emptyCard}>
                 <MaterialIcons name="cell-tower" size={32} color="#d1c5b8" />
@@ -347,10 +467,23 @@ export default function MapScreen() {
         {selected && (
           <View style={styles.panel}>
             <View style={styles.panelLeft}>
-              <View style={styles.panelAvatar}>
-                <Text style={styles.panelAvatarText}>
-                  {selected.duckId.charAt(0)}
-                </Text>
+              <View
+                style={[
+                  styles.panelAvatar,
+                  selected.duckId === selfMarker?.duckId && styles.panelAvatarConnected,
+                ]}
+              >
+                {selected.duckId === selfMarker?.duckId ? (
+                  <Image
+                    source={MESHBEACON_LOGO}
+                    style={styles.panelLogo}
+                    resizeMode="contain"
+                  />
+                ) : (
+                  <Text style={styles.panelAvatarText}>
+                    {selected.duckId.charAt(0)}
+                  </Text>
+                )}
               </View>
               <View style={{ flex: 1 }}>
                 <View style={styles.panelNameRow}>
@@ -360,6 +493,18 @@ export default function MapScreen() {
                   <View style={styles.panelTypePill}>
                     <Text style={styles.panelTypeText}>{selected.duckType}</Text>
                   </View>
+                  {selected.duckId === selfMarker?.duckId && (
+                    <View style={styles.panelConnPill}>
+                      <MaterialIcons
+                        name={selfMarker.connected ? connectionIcon : "cloud-off"}
+                        size={10}
+                        color="#2563eb"
+                      />
+                      <Text style={styles.panelConnPillText}>
+                        {selfMarker.connected ? "Connected" : "Last seen"}
+                      </Text>
+                    </View>
+                  )}
                 </View>
                 <Text style={styles.panelCoords}>
                   {selected.lat.toFixed(5)}, {selected.lng.toFixed(5)}
@@ -434,6 +579,7 @@ const styles = StyleSheet.create({
   map: { flex: 1 },
 
   markerWrap: { alignItems: "center" },
+  markerBadgeAnchor: { width: 36, height: 36 },
   marker: {
     width: 36,
     height: 36,
@@ -449,6 +595,30 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.25,
     shadowRadius: 4,
   },
+  // Branded marker for the duck this phone is directly connected to (BLE/USB).
+  markerConnected: {
+    backgroundColor: "#fff",
+    borderColor: "#f27f0d",
+  },
+  markerLogo: { width: 22, height: 22, borderRadius: 11 },
+  markerConnBadge: {
+    position: "absolute",
+    bottom: -2,
+    right: -2,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: "#2563eb",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1.5,
+    borderColor: "#fff",
+  },
+  markerStemConnected: { backgroundColor: "#2563eb" },
+  // Dimmed treatment for the self-marker once the device has disconnected —
+  // still shows its last known position, but visually de-emphasized.
+  markerFaded: { opacity: 0.45 },
+  markerConnBadgeOffline: { backgroundColor: "#8a7560" },
   markerType: { fontSize: 11, fontWeight: "700", color: "#fff" },
   markerLabel: {
     marginTop: 3,
@@ -590,6 +760,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  panelAvatarConnected: {
+    backgroundColor: "#fff",
+    borderWidth: 2,
+    borderColor: "#f27f0d",
+  },
+  panelLogo: { width: 24, height: 24, borderRadius: 12 },
   panelAvatarText: { fontSize: 16, fontWeight: "700", color: "#fff" },
   panelNameRow: {
     flexDirection: "row",
@@ -605,6 +781,16 @@ const styles = StyleSheet.create({
     paddingVertical: 1,
   },
   panelTypeText: { fontSize: 9, fontWeight: "700", color: "#15803d" },
+  panelConnPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    backgroundColor: "#dbeafe",
+    borderRadius: 4,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+  },
+  panelConnPillText: { fontSize: 9, fontWeight: "700", color: "#2563eb" },
   panelCoords: {
     fontSize: 11,
     color: "#8a7560",

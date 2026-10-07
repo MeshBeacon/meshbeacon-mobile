@@ -3,6 +3,7 @@ import { useRouter } from "expo-router";
 import { useState } from "react";
 import {
     ActivityIndicator,
+    Image,
     Modal,
     Platform,
     Pressable,
@@ -17,8 +18,11 @@ import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { SerialStatusBanner } from "@/components/serial-status-banner";
 import { useAddressBookCtx } from "@/contexts/address-book-context";
 import { useChatStoreCtx } from "@/contexts/chat-store-context";
+import { useEsp32DataCtx } from "@/contexts/esp32-data-context";
 import { useNearbyDucksCtx } from "@/contexts/nearby-ducks-context";
 import { useSerial } from "@/contexts/serial-context";
+
+const MESHBEACON_LOGO = require("@/assets/images/logo.png");
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -45,7 +49,13 @@ export default function ChatInboxScreen() {
   const { conversations, loaded } = useChatStoreCtx();
   const { contacts, addContact } = useAddressBookCtx();
   const { nearbyDucks } = useNearbyDucksCtx();
-  const { sendScan, status } = useSerial();
+  const { sendScan, status, transportMode } = useSerial();
+  const { deviceId } = useEsp32DataCtx();
+
+  // The duck ID of the device this phone is directly connected to over
+  // BLE/USB, if any — used to brand that row in the Nearby Nodes list.
+  const connectedDuckId = status === "connected" ? deviceId : null;
+  const connectionIcon = transportMode === "ble" ? "bluetooth" : "usb";
 
   // ── New conversation modal ────────────────────────────────────────────
   const [newOpen, setNewOpen] = useState(false);
@@ -307,23 +317,51 @@ export default function ChatInboxScreen() {
                   const contact = contacts.find((c) => c.duckId === duck.duckId);
                   const label = contact?.name ?? duck.duckId;
                   const alreadyOpen = conversations.some((c) => c.peerId === duck.duckId);
+                  const isConnected = duck.duckId === connectedDuckId;
                   return (
                     <Pressable
                       key={duck.duckId}
                       style={({ pressed }) => [
                         styles.nearbyRow,
+                        isConnected && styles.nearbyRowConnected,
                         pressed && styles.nearbyRowPressed,
                       ]}
                       onPress={() => openThread(duck.duckId)}
                     >
-                      <View style={styles.nearbyAvatar}>
-                        <Text style={styles.nearbyAvatarText}>
-                          {label.charAt(0).toUpperCase()}
-                        </Text>
-                        <View style={styles.nearbyDot} />
+                      <View
+                        style={[
+                          styles.nearbyAvatar,
+                          isConnected && styles.nearbyAvatarConnected,
+                        ]}
+                      >
+                        {isConnected ? (
+                          <Image
+                            source={MESHBEACON_LOGO}
+                            style={styles.nearbyLogo}
+                            resizeMode="contain"
+                          />
+                        ) : (
+                          <Text style={styles.nearbyAvatarText}>
+                            {label.charAt(0).toUpperCase()}
+                          </Text>
+                        )}
+                        {isConnected ? (
+                          <View style={styles.nearbyConnBadge}>
+                            <MaterialIcons name={connectionIcon} size={8} color="#fff" />
+                          </View>
+                        ) : (
+                          <View style={styles.nearbyDot} />
+                        )}
                       </View>
                       <View style={styles.nearbyInfo}>
-                        <Text style={styles.nearbyName} numberOfLines={1}>{label}</Text>
+                        <View style={styles.nearbyMeta}>
+                          <Text style={styles.nearbyName} numberOfLines={1}>{label}</Text>
+                          {isConnected && (
+                            <View style={styles.nearbyConnPill}>
+                              <Text style={styles.nearbyConnPillText}>Connected</Text>
+                            </View>
+                          )}
+                        </View>
                         <View style={styles.nearbyMeta}>
                           <Text style={styles.nearbyId}>{duck.duckId}</Text>
                           <View style={styles.nearbyTypePill}>
@@ -353,6 +391,7 @@ export default function ChatInboxScreen() {
                   );
                 })}
               </View>
+
             )}
             {nearbyDucks.length === 0 && !scanning && status === "connected" && (
               <View style={styles.nearbyEmpty}>
@@ -770,6 +809,7 @@ const styles = StyleSheet.create({
     borderColor: "#bbf7d0",
   },
   nearbyRowPressed: { backgroundColor: "#dcfce7" },
+  nearbyRowConnected: { backgroundColor: "#eff6ff", borderColor: "#bfdbfe" },
   nearbyAvatar: {
     width: 40,
     height: 40,
@@ -778,6 +818,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  nearbyAvatarConnected: {
+    backgroundColor: "#fff",
+    borderWidth: 2,
+    borderColor: "#f27f0d",
+  },
+  nearbyLogo: { width: 24, height: 24, borderRadius: 12 },
   nearbyAvatarText: { fontSize: 17, fontWeight: "700", color: "#fff" },
   nearbyDot: {
     position: "absolute",
@@ -790,8 +836,28 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: "#f0fdf4",
   },
+  nearbyConnBadge: {
+    position: "absolute",
+    bottom: -2,
+    right: -2,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: "#2563eb",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1.5,
+    borderColor: "#eff6ff",
+  },
+  nearbyConnPill: {
+    backgroundColor: "#dbeafe",
+    borderRadius: 4,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+  },
+  nearbyConnPillText: { fontSize: 9, fontWeight: "700", color: "#2563eb" },
   nearbyInfo: { flex: 1, gap: 2 },
-  nearbyName: { fontSize: 14, fontWeight: "700", color: "#181411" },
+  nearbyName: { fontSize: 14, fontWeight: "700", color: "#181411", flexShrink: 1 },
   nearbyMeta: { flexDirection: "row", alignItems: "center", gap: 6 },
   nearbyId: {
     fontSize: 11,

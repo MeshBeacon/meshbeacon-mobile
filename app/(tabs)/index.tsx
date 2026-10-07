@@ -10,18 +10,19 @@ import {
     View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { Image } from 'react-native';
 
 import { SerialStatusBanner } from "@/components/serial-status-banner";
 import { useLocationCtx } from "@/contexts/location-context";
 import { useSerial } from "@/contexts/serial-context";
 import { useToast } from "@/contexts/toast-context";
-import { useEsp32Data } from "@/hooks/use-esp32-data";
+import { useEsp32DataCtx } from "@/contexts/esp32-data-context";
 
 export default function HomeScreen() {
   const router = useRouter();
   const { status, sendSOS } = useSerial();
   const gps = useLocationCtx();
-  const esp32 = useEsp32Data();
+  const esp32 = useEsp32DataCtx();
   const { showToast, showConfirm } = useToast();
   const [sending, setSending] = useState(false);
   const [showAllMessages, setShowAllMessages] = useState(false);
@@ -95,7 +96,10 @@ export default function HomeScreen() {
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
       <View style={styles.container}>
         <View style={styles.header}>
-          <Text style={styles.headerTitle}>MeshBeacon</Text>
+	    <Image
+      style={{ width: 40, height: 40, resizeMode: 'contain' }}
+      source={require('../../assets/images/logo.png')}
+    />
           <Pressable
             style={styles.newMessageBtn}
             onPress={() => router.push("/(tabs)/messages")}
@@ -230,7 +234,7 @@ export default function HomeScreen() {
             <Text style={styles.sosHint}>
               {status === "connected"
                 ? "Tap to send emergency signal"
-                : "Connect ESP32 to enable"}
+                : "Connect Device to enable"}
             </Text>
           </View>
 

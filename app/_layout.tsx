@@ -12,6 +12,7 @@ import { ConnectPromptSheet } from "@/components/connect-prompt-sheet";
 import { AddressBookProvider } from "@/contexts/address-book-context";
 import { BroadcastStoreProvider } from "@/contexts/broadcast-store-context";
 import { ChatStoreProvider } from "@/contexts/chat-store-context";
+import { Esp32DataProvider } from "@/contexts/esp32-data-context";
 import { LocationProvider } from "@/contexts/location-context";
 import { MessageStoreProvider } from "@/contexts/message-store-context";
 import { NearbyDucksProvider } from "@/contexts/nearby-ducks-context";
@@ -35,6 +36,7 @@ export default function RootLayout() {
               <BroadcastStoreProvider>
                 <NearbyDucksProvider>
                   <SerialProvider>
+                    <Esp32DataProvider>
                     <ToastProvider>
                     <ConnectPromptSheet />
                     <ThemeProvider
@@ -57,6 +59,7 @@ export default function RootLayout() {
                       <StatusBar style="auto" />
                     </ThemeProvider>
                     </ToastProvider>
+                    </Esp32DataProvider>
                   </SerialProvider>
                 </NearbyDucksProvider>
               </BroadcastStoreProvider>
