@@ -279,6 +279,18 @@ export default function ChatThreadScreen() {
                             : styles.bubbleMetaReceived,
                         ]}
                       >
+                        {msg.encrypted !== undefined && (
+                          <MaterialIcons
+                            name={msg.encrypted ? "lock" : "lock-open"}
+                            size={12}
+                            color={msg.encrypted ? "#2e7d32" : "#b45309"}
+                            accessibilityLabel={
+                              msg.encrypted
+                                ? "Encrypted"
+                                : "Sent without encryption"
+                            }
+                          />
+                        )}
                         {msg.hasLocation && (
                           <View style={styles.locationPill}>
                             <MaterialIcons

@@ -41,6 +41,14 @@ export interface ChatMessage {
   mid?: string;
   /** Delivery status — only set for sent messages that included a MID. */
   deliveryStatus?: "sent" | "delivered";
+  /**
+   * Whether this message was actually encrypted (session-mode MTALK
+   * encryption) vs. sent/received via the plaintext fallback. Undefined
+   * means unknown — either the firmware hasn't reported it yet (sent
+   * messages, until the CDK:ACK,ID:MTALK confirmation arrives) or older
+   * firmware that doesn't send the ENC: field at all.
+   */
+  encrypted?: boolean;
 }
 
 /** Summary of a conversation thread — used to render inbox rows. */
@@ -165,6 +173,7 @@ export function useChatStore() {
         lat?: string;
         lng?: string;
         mid?: string;
+        encrypted?: boolean;
       },
     ): ChatMessage => {
       const hasLocation = !!(entry.lat && entry.lng);
@@ -176,6 +185,9 @@ export function useChatStore() {
         ...(hasLocation ? { lat: entry.lat, lng: entry.lng } : {}),
         ...(entry.mid
           ? { mid: entry.mid, deliveryStatus: "sent" as const }
+          : {}),
+        ...(entry.encrypted !== undefined
+          ? { encrypted: entry.encrypted }
           : {}),
         timestamp: Date.now(),
       };
@@ -215,8 +227,12 @@ export function useChatStore() {
 
   /** Add a message received from the given peer. */
   const addReceived = useCallback(
-    (peerId: string, text: string, coords?: { lat: string; lng: string }) =>
-      addMessage(peerId, { direction: "received", text, ...coords }),
+    (
+      peerId: string,
+      text: string,
+      coords?: { lat: string; lng: string },
+      encrypted?: boolean,
+    ) => addMessage(peerId, { direction: "received", text, ...coords, encrypted }),
     [addMessage],
   );
 
@@ -257,6 +273,21 @@ export function useChatStore() {
     });
   }, []);
 
+  /**
+   * Set the encrypted flag on the sent message with the given MID.
+   * Called when the local CDK:ACK,ID:MTALK confirmation (carrying ENC:)
+   * arrives after a message is handed to the radio.
+   */
+  const markEncrypted = useCallback((mid: string, encrypted: boolean) => {
+    setThreads((prev) => {
+      const next: Record<string, ChatMessage[]> = {};
+      for (const [peerId, msgs] of Object.entries(prev)) {
+        next[peerId] = msgs.map((m) => (m.mid === mid ? { ...m, encrypted } : m));
+      }
+      return next;
+    });
+  }, []);
+
   /** Delete all messages for one peer. */
   const clearThread = useCallback((peerId: string) => {
     setThreads((prev) => {
@@ -287,6 +318,7 @@ export function useChatStore() {
     markRead,
     incrementUnread,
     markDelivered,
+    markEncrypted,
     clearThread,
     clearAll,
   };
