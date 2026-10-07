@@ -60,6 +60,7 @@ interface SelectedDuck {
   duckType: string;
   lat: number;
   lng: number;
+  phoneConnected?: boolean;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -304,12 +305,20 @@ export default function MapScreen() {
                     duckType: duck.duckType,
                     lat: duck.lat,
                     lng: duck.lng,
+                    phoneConnected: duck.phoneConnected,
                   })
                 }
               >
                 <View style={styles.markerWrap}>
-                  <View style={styles.marker}>
-                    <Text style={styles.markerType}>{duck.duckType[0]}</Text>
+                  <View style={styles.markerBadgeAnchor}>
+                    <View style={styles.marker}>
+                      <Text style={styles.markerType}>{duck.duckType[0]}</Text>
+                    </View>
+                    {duck.phoneConnected && (
+                      <View style={styles.markerConnDot}>
+                        <MaterialIcons name="phonelink" size={9} color="#fff" />
+                      </View>
+                    )}
                   </View>
                   <Text style={styles.markerLabel} numberOfLines={1}>
                     {duck.duckId}
@@ -505,6 +514,12 @@ export default function MapScreen() {
                       </Text>
                     </View>
                   )}
+                  {selected.duckId !== selfMarker?.duckId && selected.phoneConnected && (
+                    <View style={styles.panelConnPill}>
+                      <MaterialIcons name="phonelink" size={10} color="#2563eb" />
+                      <Text style={styles.panelConnPillText}>Operator connected</Text>
+                    </View>
+                  )}
                 </View>
                 <Text style={styles.panelCoords}>
                   {selected.lat.toFixed(5)}, {selected.lng.toFixed(5)}
@@ -615,6 +630,21 @@ const styles = StyleSheet.create({
     borderColor: "#fff",
   },
   markerStemConnected: { backgroundColor: "#2563eb" },
+  // Small badge shown on OTHER ducks' markers when that duck currently has
+  // an operator's phone attached via USB/BLE (mesh-reported PHONE: status).
+  markerConnDot: {
+    position: "absolute",
+    bottom: -2,
+    right: -2,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: "#2563eb",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1.5,
+    borderColor: "#fff",
+  },
   // Dimmed treatment for the self-marker once the device has disconnected —
   // still shows its last known position, but visually de-emphasized.
   markerFaded: { opacity: 0.45 },

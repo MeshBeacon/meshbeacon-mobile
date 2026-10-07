@@ -26,6 +26,11 @@ export interface NearbyDuck {
   lat?: number;
   /** GPS longitude, if the duck has broadcast its position. */
   lng?: number;
+  /**
+   * Whether this duck currently has an operator's phone attached via
+   * USB/BLE, as last reported over the mesh. Undefined when unknown.
+   */
+  phoneConnected?: boolean;
   lastSeen: number;
 }
 
@@ -38,7 +43,13 @@ export function useNearbyDucks() {
   }, []);
 
   const addSeen = useCallback(
-    (duckId: string, duckType: string, lat?: number, lng?: number) => {
+    (
+      duckId: string,
+      duckType: string,
+      lat?: number,
+      lng?: number,
+      phoneConnected?: boolean,
+    ) => {
       if (!duckId || duckId.trim().length === 0) return;
       // PapaDucks are gateway infrastructure — exclude from the nearby nodes list.
       if (duckType === "PAPA") return;
@@ -46,9 +57,10 @@ export function useNearbyDucks() {
       mapRef.current.set(duckId, {
         duckId,
         duckType,
-        // Preserve previously cached GPS if this update has none
+        // Preserve previously cached GPS/phone status if this update has none
         lat: lat ?? existing?.lat,
         lng: lng ?? existing?.lng,
+        phoneConnected: phoneConnected ?? existing?.phoneConnected,
         lastSeen: Date.now(),
       });
       rebuild();

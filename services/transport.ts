@@ -164,6 +164,13 @@ export type SeenFrame = {
   lat?: number;
   /** GPS longitude from the duck's last known position (if available). */
   lng?: number;
+  /**
+   * Whether that duck currently has an operator's phone attached via
+   * USB/BLE, as last reported in its mesh BEACON/BEACON_ACK (PHONE: field).
+   * Undefined when the firmware hasn't reported this yet (e.g. older
+   * firmware, or no fresh BEACON heard from that duck).
+   */
+  phoneConnected?: boolean;
   receivedAt: number;
 };
 export type UnknownFrame = { type: string; raw: string };
@@ -298,12 +305,15 @@ export function parseIncomingLine(line: string): IncomingFrame | null {
         lat && lat !== "none" && isFinite(parseFloat(lat)) ? parseFloat(lat) : undefined;
       const validLng =
         lng && lng !== "none" && isFinite(parseFloat(lng)) ? parseFloat(lng) : undefined;
+      const phone = fields["PHONE"];
+      const phoneConnected = phone === "1" ? true : phone === "0" ? false : undefined;
       return {
         type: "SEEN",
         duckId: fields["ID"] ?? "",
         duckType: fields["TYPE"] ?? "UNKN",
         ...(validLat !== undefined ? { lat: validLat } : {}),
         ...(validLng !== undefined ? { lng: validLng } : {}),
+        ...(phoneConnected !== undefined ? { phoneConnected } : {}),
         receivedAt: Date.now(),
       };
     }

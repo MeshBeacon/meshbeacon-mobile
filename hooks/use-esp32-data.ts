@@ -193,7 +193,8 @@ export function useEsp32Data(): Esp32Data {
       }
       if (frame.type === "SEEN") {
         const seen = frame as SeenFrame;
-        if (seen.duckId) addSeen(seen.duckId, seen.duckType, seen.lat, seen.lng);
+        if (seen.duckId)
+          addSeen(seen.duckId, seen.duckType, seen.lat, seen.lng, seen.phoneConnected);
       }
       if (frame.type === "SCAN_ACK") {
         // Firmware confirmed the scan. If the ping failed (not in PUBLIC

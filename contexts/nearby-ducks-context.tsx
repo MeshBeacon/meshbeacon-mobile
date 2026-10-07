@@ -4,8 +4,14 @@ import { useNearbyDucks, type NearbyDuck } from "@/hooks/use-nearby-ducks";
 
 interface NearbyDucksCtx {
   nearbyDucks: NearbyDuck[];
-  /** Record a duck as seen. Call with (duckId, duckType, lat?, lng?) from a SEEN or MTALK frame. */
-  addSeen: (duckId: string, duckType: string, lat?: number, lng?: number) => void;
+  /** Record a duck as seen. Call with (duckId, duckType, lat?, lng?, phoneConnected?) from a SEEN or MTALK frame. */
+  addSeen: (
+    duckId: string,
+    duckType: string,
+    lat?: number,
+    lng?: number,
+    phoneConnected?: boolean,
+  ) => void;
 }
 
 const Ctx = createContext<NearbyDucksCtx | null>(null);

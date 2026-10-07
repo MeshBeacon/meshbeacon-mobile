@@ -349,6 +349,10 @@ export default function ChatInboxScreen() {
                           <View style={styles.nearbyConnBadge}>
                             <MaterialIcons name={connectionIcon} size={8} color="#fff" />
                           </View>
+                        ) : duck.phoneConnected ? (
+                          <View style={styles.nearbyConnBadge}>
+                            <MaterialIcons name="phonelink" size={8} color="#fff" />
+                          </View>
                         ) : (
                           <View style={styles.nearbyDot} />
                         )}
@@ -359,6 +363,11 @@ export default function ChatInboxScreen() {
                           {isConnected && (
                             <View style={styles.nearbyConnPill}>
                               <Text style={styles.nearbyConnPillText}>Connected</Text>
+                            </View>
+                          )}
+                          {!isConnected && duck.phoneConnected && (
+                            <View style={styles.nearbyConnPill}>
+                              <Text style={styles.nearbyConnPillText}>Operator connected</Text>
                             </View>
                           )}
                         </View>
