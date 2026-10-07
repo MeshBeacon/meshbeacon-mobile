@@ -154,7 +154,6 @@ export function useEsp32Data(): Esp32Data {
     addReceived: addChatReceived,
     incrementUnread,
     markDelivered,
-    markEncrypted,
   } = useChatStoreCtx();
   const { transportMode, status } = useSerial();
   const {
@@ -226,7 +225,7 @@ export function useEsp32Data(): Esp32Data {
           }
           const coords =
             talk.lat && talk.lng ? { lat: talk.lat, lng: talk.lng } : undefined;
-          addChatReceived(peerId, talk.text, coords, talk.encrypted);
+          addChatReceived(peerId, talk.text, coords);
           incrementUnread(peerId);
           notifyDirectMessage(peerId, talk.text);
         }
@@ -235,14 +234,6 @@ export function useEsp32Data(): Esp32Data {
         // Delivery receipt — mark the corresponding sent message as delivered
         const mack = frame as MackFrame;
         if (mack.id) markDelivered(mack.id);
-      }
-      if (frame.type === "ACK") {
-        // Local send confirmation for an outgoing MTALK — reports whether it
-        // actually went out encrypted or fell back to plaintext.
-        const ack = frame as AckFrame;
-        if (ack.id === "MTALK" && ack.mid && ack.encrypted !== undefined) {
-          markEncrypted(ack.mid, ack.encrypted);
-        }
       }
       if (
         frame.type === "SOS" &&
@@ -265,7 +256,6 @@ export function useEsp32Data(): Esp32Data {
     addChatReceived,
     incrementUnread,
     markDelivered,
-    markEncrypted,
     notifyNewMessage,
     notifyEmergencyBroadcast,
     notifyDeviceSOS,

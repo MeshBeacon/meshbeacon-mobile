@@ -56,7 +56,13 @@ export default function ChatThreadScreen() {
 
   const { status, sendMTalk } = useSerial();
   const insets = useSafeAreaInsets();
-  const { getMessages, addSent: storAddSent, markRead } = useChatStoreCtx();
+  const {
+    getMessages,
+    addSent: storAddSent,
+    markRead,
+    markFailed,
+    markRetrying,
+  } = useChatStoreCtx();
   const { showToast } = useToast();
   const gps = useLocationCtx();
   const { contacts, addContact, removeContact, hasContact } =
@@ -83,6 +89,87 @@ export default function ChatThreadScreen() {
   const scrollRef = useRef<ScrollView>(null);
   const initialScrollDone = useRef(false);
   const keyboardVisible = useRef(false);
+
+  // ── Bounded auto-retry for delivery receipts ─────────────────────────────
+  // MTALK is fire-and-forget at the radio layer -- a lost packet or a lost
+  // CDK:MACK receipt on the way back otherwise leaves a message stuck in
+  // "sent" forever with no feedback. Wait a few seconds for each MID, and
+  // if no CDK:MACK (markDelivered) has arrived, resend the same MID up to
+  // twice with backoff before giving up and surfacing a manual resend.
+  const RETRY_DELAYS_MS = [5000, 8000, 12000];
+  const messagesRef = useRef(messages);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+  const retryTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(
+    new Map(),
+  );
+
+  const clearRetryTimer = useCallback((mid: string) => {
+    const timer = retryTimers.current.get(mid);
+    if (timer) {
+      clearTimeout(timer);
+      retryTimers.current.delete(mid);
+    }
+  }, []);
+
+  const armRetry = useCallback(
+    (
+      mid: string,
+      text: string,
+      location: { latitude: number; longitude: number } | undefined,
+      step = 0,
+    ) => {
+      clearRetryTimer(mid);
+      const timer = setTimeout(async () => {
+        const current = messagesRef.current.find((m) => m.mid === mid);
+        if (!current || current.deliveryStatus === "delivered") {
+          retryTimers.current.delete(mid);
+          return;
+        }
+        if (step < RETRY_DELAYS_MS.length - 1) {
+          try {
+            await sendMTalk(peerId, text, location, mid);
+            markRetrying(mid);
+          } catch {
+            // Ignore -- next scheduled check will try again or give up.
+          }
+          armRetry(mid, text, location, step + 1);
+        } else {
+          markFailed(mid);
+          retryTimers.current.delete(mid);
+        }
+      }, RETRY_DELAYS_MS[step]);
+      retryTimers.current.set(mid, timer);
+    },
+    [clearRetryTimer, markFailed, markRetrying, peerId, sendMTalk],
+  );
+
+  // Clear all pending retry timers on unmount.
+  useEffect(() => {
+    const timers = retryTimers.current;
+    return () => {
+      timers.forEach((timer) => clearTimeout(timer));
+      timers.clear();
+    };
+  }, []);
+
+  /** Manual resend for a message whose auto-retry window gave up. */
+  const handleResend = useCallback(
+    (msg: ReturnType<typeof getMessages>[number]) => {
+      if (!msg.mid) return;
+      const location =
+        msg.hasLocation && msg.lat && msg.lng
+          ? { latitude: parseFloat(msg.lat), longitude: parseFloat(msg.lng) }
+          : undefined;
+      markRetrying(msg.mid);
+      sendMTalk(peerId, msg.text, location, msg.mid).catch((err) => {
+        showToast((err as Error).message, "error");
+      });
+      armRetry(msg.mid, msg.text, location, 0);
+    },
+    [armRetry, markRetrying, peerId, sendMTalk, showToast],
+  );
 
   // Contact info for this peer
   const contact = contacts.find((c) => c.duckId === peerId);
@@ -160,6 +247,7 @@ export default function ChatThreadScreen() {
       const mid = makeMid();
       await sendMTalk(peerId, message.trim(), location, mid);
       addSent(message.trim(), location, mid);
+      armRetry(mid, message.trim(), location, 0);
       setMessage("");
       setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
     } catch (err) {
@@ -279,18 +367,6 @@ export default function ChatThreadScreen() {
                             : styles.bubbleMetaReceived,
                         ]}
                       >
-                        {msg.encrypted !== undefined && (
-                          <MaterialIcons
-                            name={msg.encrypted ? "lock" : "lock-open"}
-                            size={12}
-                            color={msg.encrypted ? "#2e7d32" : "#b45309"}
-                            accessibilityLabel={
-                              msg.encrypted
-                                ? "Encrypted"
-                                : "Sent without encryption"
-                            }
-                          />
-                        )}
                         {msg.hasLocation && (
                           <View style={styles.locationPill}>
                             <MaterialIcons
@@ -307,20 +383,34 @@ export default function ChatThreadScreen() {
                             )}
                           </View>
                         )}
-                        {msg.mid && (
-                          <MaterialIcons
-                            name={
-                              msg.deliveryStatus === "delivered"
-                                ? "done-all"
-                                : "done"
-                            }
-                            size={13}
-                            color={
-                              msg.deliveryStatus === "delivered"
-                                ? "#f27f0d"
-                                : "#a09080"
-                            }
-                          />
+                        {msg.mid && msg.deliveryStatus === "failed" ? (
+                          <Pressable
+                            onPress={() => handleResend(msg)}
+                            hitSlop={8}
+                            accessibilityLabel="Delivery failed, tap to resend"
+                          >
+                            <MaterialIcons
+                              name="error-outline"
+                              size={14}
+                              color="#c0392b"
+                            />
+                          </Pressable>
+                        ) : (
+                          msg.mid && (
+                            <MaterialIcons
+                              name={
+                                msg.deliveryStatus === "delivered"
+                                  ? "done-all"
+                                  : "done"
+                              }
+                              size={13}
+                              color={
+                                msg.deliveryStatus === "delivered"
+                                  ? "#f27f0d"
+                                  : "#a09080"
+                              }
+                            />
+                          )
                         )}
                         <Text style={styles.timeText}>
                           {formatTime(msg.timestamp)}

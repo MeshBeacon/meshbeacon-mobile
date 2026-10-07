@@ -39,20 +39,7 @@ export type StatusCallback = (status: TransportStatus, detail?: string) => void;
 export const MAX_FRAME_BYTES = 256;
 export type BattFrame = { type: "BATT"; level: number };
 export type IdFrame = { type: "ID"; value: string };
-export type AckFrame = {
-  type: "ACK";
-  id: string;
-  /** Present only for the MTALK send confirmation (id === "MTALK"). */
-  target?: string;
-  /** Present only for the MTALK send confirmation when the app included a MID. */
-  mid?: string;
-  /**
-   * Present only for the MTALK send confirmation. True when the message was
-   * actually encrypted; false when it went out via the plaintext fallback
-   * (see docs/end-to-end-encryption-setup.md).
-   */
-  encrypted?: boolean;
-};
+export type AckFrame = { type: "ACK"; id: string };
 export type StatusFrame = { type: "STATUS"; fields: Record<string, string> };
 export type ErrFrame = { type: "ERR"; message: string };
 export type MsgFrame = {
@@ -95,12 +82,6 @@ export type MTalkFrame = {
   lng?: string;
   /** Message ID echoed back in the MACK receipt (present when firmware v2+ sent this). */
   mid?: string;
-  /**
-   * True when this packet was actually decrypted (session-mode MTALK
-   * encryption); false when it arrived via the plaintext fallback.
-   * Undefined when the firmware does not report this (older firmware).
-   */
-  encrypted?: boolean;
   receivedAt: number;
 };
 /** Delivery receipt — the receiver's firmware sends this back to the sender after
@@ -263,15 +244,7 @@ export function parseIncomingLine(line: string): IncomingFrame | null {
     case "ID":
       return { type: "ID", value: fields["VALUE"] ?? rest };
     case "ACK":
-      return {
-        type: "ACK",
-        id: fields["ID"] ?? "",
-        ...(fields["TARGET"] ? { target: fields["TARGET"] } : {}),
-        ...(fields["MID"] ? { mid: fields["MID"] } : {}),
-        ...(fields["ENC"] !== undefined
-          ? { encrypted: fields["ENC"] === "1" }
-          : {}),
-      };
+      return { type: "ACK", id: fields["ID"] ?? "" };
     case "STATUS":
       return { type: "STATUS", fields };
     case "ERR":
@@ -316,9 +289,6 @@ export function parseIncomingLine(line: string): IncomingFrame | null {
         ...(fields["MID"] ? { mid: fields["MID"] } : {}),
         ...(validLat !== undefined ? { lat: validLat } : {}),
         ...(validLng !== undefined ? { lng: validLng } : {}),
-        ...(fields["ENC"] !== undefined
-          ? { encrypted: fields["ENC"] === "1" }
-          : {}),
         receivedAt: Date.now(),
       };
     }

@@ -39,16 +39,13 @@ export interface ChatMessage {
   timestamp: number;
   /** Short random message ID used for delivery receipts (sent messages only). */
   mid?: string;
-  /** Delivery status — only set for sent messages that included a MID. */
-  deliveryStatus?: "sent" | "delivered";
   /**
-   * Whether this message was actually encrypted (session-mode MTALK
-   * encryption) vs. sent/received via the plaintext fallback. Undefined
-   * means unknown — either the firmware hasn't reported it yet (sent
-   * messages, until the CDK:ACK,ID:MTALK confirmation arrives) or older
-   * firmware that doesn't send the ENC: field at all.
+   * Delivery status — only set for sent messages that included a MID.
+   * "failed" means the bounded auto-retry window (see the chat screen's
+   * retry timer) elapsed with no CDK:MACK receipt; the UI offers a manual
+   * resend for these.
    */
-  encrypted?: boolean;
+  deliveryStatus?: "sent" | "delivered" | "failed";
 }
 
 /** Summary of a conversation thread — used to render inbox rows. */
@@ -173,7 +170,6 @@ export function useChatStore() {
         lat?: string;
         lng?: string;
         mid?: string;
-        encrypted?: boolean;
       },
     ): ChatMessage => {
       const hasLocation = !!(entry.lat && entry.lng);
@@ -185,9 +181,6 @@ export function useChatStore() {
         ...(hasLocation ? { lat: entry.lat, lng: entry.lng } : {}),
         ...(entry.mid
           ? { mid: entry.mid, deliveryStatus: "sent" as const }
-          : {}),
-        ...(entry.encrypted !== undefined
-          ? { encrypted: entry.encrypted }
           : {}),
         timestamp: Date.now(),
       };
@@ -227,12 +220,8 @@ export function useChatStore() {
 
   /** Add a message received from the given peer. */
   const addReceived = useCallback(
-    (
-      peerId: string,
-      text: string,
-      coords?: { lat: string; lng: string },
-      encrypted?: boolean,
-    ) => addMessage(peerId, { direction: "received", text, ...coords, encrypted }),
+    (peerId: string, text: string, coords?: { lat: string; lng: string }) =>
+      addMessage(peerId, { direction: "received", text, ...coords }),
     [addMessage],
   );
 
@@ -274,15 +263,34 @@ export function useChatStore() {
   }, []);
 
   /**
-   * Set the encrypted flag on the sent message with the given MID.
-   * Called when the local CDK:ACK,ID:MTALK confirmation (carrying ENC:)
-   * arrives after a message is handed to the radio.
+   * Mark the sent message with the given MID as failed — called by the
+   * chat screen's retry timer once the bounded auto-retry window elapses
+   * with no CDK:MACK delivery receipt. Surfaces a manual resend in the UI.
    */
-  const markEncrypted = useCallback((mid: string, encrypted: boolean) => {
+  const markFailed = useCallback((mid: string) => {
     setThreads((prev) => {
       const next: Record<string, ChatMessage[]> = {};
       for (const [peerId, msgs] of Object.entries(prev)) {
-        next[peerId] = msgs.map((m) => (m.mid === mid ? { ...m, encrypted } : m));
+        next[peerId] = msgs.map((m) =>
+          m.mid === mid ? { ...m, deliveryStatus: "failed" as const } : m,
+        );
+      }
+      return next;
+    });
+  }, []);
+
+  /**
+   * Reset a message's delivery status back to "sent" when an automatic or
+   * manual resend is issued, so the UI shows the normal in-flight state
+   * again instead of "failed" while the new attempt is pending.
+   */
+  const markRetrying = useCallback((mid: string) => {
+    setThreads((prev) => {
+      const next: Record<string, ChatMessage[]> = {};
+      for (const [peerId, msgs] of Object.entries(prev)) {
+        next[peerId] = msgs.map((m) =>
+          m.mid === mid ? { ...m, deliveryStatus: "sent" as const } : m,
+        );
       }
       return next;
     });
@@ -318,7 +326,8 @@ export function useChatStore() {
     markRead,
     incrementUnread,
     markDelivered,
-    markEncrypted,
+    markFailed,
+    markRetrying,
     clearThread,
     clearAll,
   };

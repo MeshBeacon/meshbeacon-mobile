@@ -20,7 +20,6 @@ interface ChatStoreCtx {
     peerId: string,
     text: string,
     coords?: { lat: string; lng: string },
-    encrypted?: boolean,
   ) => ChatMessage;
   /** Get the full message list for one peer thread. */
   getMessages: (peerId: string) => ChatMessage[];
@@ -30,8 +29,10 @@ interface ChatStoreCtx {
   incrementUnread: (peerId: string) => void;
   /** Mark a sent message as delivered when a CDK:MACK receipt arrives. */
   markDelivered: (mid: string) => void;
-  /** Set the encrypted flag on a sent message once the CDK:ACK,ID:MTALK confirmation arrives. */
-  markEncrypted: (mid: string, encrypted: boolean) => void;
+  /** Mark a sent message as failed once the bounded auto-retry window elapses. */
+  markFailed: (mid: string) => void;
+  /** Reset a message's status back to "sent" when an auto/manual resend is issued. */
+  markRetrying: (mid: string) => void;
   /** Delete all messages for one peer. */
   clearThread: (peerId: string) => void;
   /** Delete every thread and wipe from disk. */
