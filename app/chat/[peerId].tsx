@@ -128,9 +128,9 @@ export default function ChatThreadScreen() {
           return;
         }
         if (step < RETRY_DELAYS_MS.length - 1) {
+          markRetrying(mid);
           try {
             await sendMTalk(peerId, text, location, mid);
-            markRetrying(mid);
           } catch {
             // Ignore -- next scheduled check will try again or give up.
           }
@@ -138,11 +138,15 @@ export default function ChatThreadScreen() {
         } else {
           markFailed(mid);
           retryTimers.current.delete(mid);
+          showToast(
+            "Message couldn't be delivered. Tap it to resend.",
+            "warning",
+          );
         }
       }, RETRY_DELAYS_MS[step]);
       retryTimers.current.set(mid, timer);
     },
-    [clearRetryTimer, markFailed, markRetrying, peerId, sendMTalk],
+    [clearRetryTimer, markFailed, markRetrying, peerId, sendMTalk, showToast],
   );
 
   // Clear all pending retry timers on unmount.
@@ -395,6 +399,13 @@ export default function ChatThreadScreen() {
                               color="#c0392b"
                             />
                           </Pressable>
+                        ) : msg.mid && msg.deliveryStatus === "retrying" ? (
+                          <ActivityIndicator
+                            size="small"
+                            color="#a09080"
+                            style={styles.retryingSpinner}
+                            accessibilityLabel="Resending message"
+                          />
                         ) : (
                           msg.mid && (
                             <MaterialIcons
@@ -721,6 +732,7 @@ const styles = StyleSheet.create({
   },
   bubbleMetaSent: { justifyContent: "flex-end" },
   bubbleMetaReceived: { justifyContent: "flex-start" },
+  retryingSpinner: { transform: [{ scale: 0.65 }] },
   timeText: { color: "#a09080", fontSize: 11, fontWeight: "500" },
 
   locationPill: {

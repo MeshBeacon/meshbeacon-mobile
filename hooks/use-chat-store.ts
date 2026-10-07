@@ -41,11 +41,14 @@ export interface ChatMessage {
   mid?: string;
   /**
    * Delivery status — only set for sent messages that included a MID.
+   * "sent" is the initial in-flight state right after the first send.
+   * "retrying" means an auto-retry (or manual resend) is currently in
+   * flight, waiting on a fresh CDK:MACK receipt for this attempt.
    * "failed" means the bounded auto-retry window (see the chat screen's
    * retry timer) elapsed with no CDK:MACK receipt; the UI offers a manual
    * resend for these.
    */
-  deliveryStatus?: "sent" | "delivered" | "failed";
+  deliveryStatus?: "sent" | "retrying" | "delivered" | "failed";
 }
 
 /** Summary of a conversation thread — used to render inbox rows. */
@@ -280,16 +283,17 @@ export function useChatStore() {
   }, []);
 
   /**
-   * Reset a message's delivery status back to "sent" when an automatic or
-   * manual resend is issued, so the UI shows the normal in-flight state
-   * again instead of "failed" while the new attempt is pending.
+   * Mark a message as actively retrying when an automatic or manual resend
+   * is issued, so the UI can show a distinct in-flight indicator instead of
+   * looking identical to the original "sent" state (or stuck on "failed")
+   * while the new attempt is pending.
    */
   const markRetrying = useCallback((mid: string) => {
     setThreads((prev) => {
       const next: Record<string, ChatMessage[]> = {};
       for (const [peerId, msgs] of Object.entries(prev)) {
         next[peerId] = msgs.map((m) =>
-          m.mid === mid ? { ...m, deliveryStatus: "sent" as const } : m,
+          m.mid === mid ? { ...m, deliveryStatus: "retrying" as const } : m,
         );
       }
       return next;

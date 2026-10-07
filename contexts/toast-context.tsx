@@ -98,6 +98,42 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
 
   // ── Toast ──────────────────────────────────────────────────────────────────
 
+  const toastTimers = useRef<Map<number, ReturnType<typeof setTimeout>>>(
+    new Map(),
+  );
+
+  const fadeOutAndRemove = useCallback((id: number, anim: Animated.Value) => {
+    Animated.timing(anim, {
+      toValue: 0,
+      duration: 200,
+      useNativeDriver: true,
+    }).start(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    });
+  }, []);
+
+  /** Dismiss a toast immediately, whether it's an auto-timeout or a manual close-button tap. */
+  const dismissToast = useCallback(
+    (id: number, anim: Animated.Value) => {
+      const timer = toastTimers.current.get(id);
+      if (timer) {
+        clearTimeout(timer);
+        toastTimers.current.delete(id);
+      }
+      fadeOutAndRemove(id, anim);
+    },
+    [fadeOutAndRemove],
+  );
+
+  // Clear all pending auto-dismiss timers on unmount.
+  useEffect(() => {
+    const timers = toastTimers.current;
+    return () => {
+      timers.forEach((timer) => clearTimeout(timer));
+      timers.clear();
+    };
+  }, []);
+
   const showToast = useCallback(
     (message: string, variant: ToastVariant = "info") => {
       const id = ++idRef.current;
@@ -113,18 +149,15 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
         friction: 10,
       }).start();
 
-      // Auto-dismiss after 3 s
-      setTimeout(() => {
-        Animated.timing(anim, {
-          toValue: 0,
-          duration: 250,
-          useNativeDriver: true,
-        }).start(() => {
-          setToasts((prev) => prev.filter((t) => t.id !== id));
-        });
+      // Auto-dismiss after 3 s -- tracked so a manual close-button tap can
+      // cancel it instead of racing the fade-out/removal twice.
+      const timer = setTimeout(() => {
+        toastTimers.current.delete(id);
+        fadeOutAndRemove(id, anim);
       }, 3000);
+      toastTimers.current.set(id, timer);
     },
-    [],
+    [fadeOutAndRemove],
   );
 
   // ── Confirm dialog ────────────────────────────────────────────────────────
@@ -202,7 +235,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
                     : Math.max(bottom + 16, 32),
               },
             ]}
-            pointerEvents="none"
+            pointerEvents="box-none"
           >
             {toasts.map((toast) => {
               const { bg, icon } = VARIANT_COLORS[toast.variant];
@@ -229,6 +262,14 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
                   <Text style={styles.toastMessage} numberOfLines={3}>
                     {toast.message}
                   </Text>
+                  <Pressable
+                    onPress={() => dismissToast(toast.id, toast.anim)}
+                    hitSlop={10}
+                    style={styles.toastCloseBtn}
+                    accessibilityLabel="Dismiss notification"
+                  >
+                    <Text style={styles.toastCloseText}>✕</Text>
+                  </Pressable>
                 </Animated.View>
               );
             })}
@@ -354,5 +395,17 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "600",
     lineHeight: 20,
+  },
+  toastCloseBtn: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  toastCloseText: {
+    color: "rgba(255,255,255,0.85)",
+    fontSize: 13,
+    fontWeight: "800",
   },
 });
