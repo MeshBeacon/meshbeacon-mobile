@@ -168,6 +168,32 @@ export default function ChatThreadScreen() {
     };
   }, []);
 
+  // Resume any messages left stuck in "retrying" from a previous mount of
+  // this screen. Unmounting cancels pending timers (above) to avoid leaks,
+  // but that means navigating away mid-retry and coming back later left the
+  // message permanently parked at "retrying" with no timer ever left to
+  // resolve it to "delivered" or "failed" -- the spinner would then spin
+  // forever unless a late CDK:MACK happened to arrive. Re-arm a fresh bounded
+  // retry (from step 0) for any such orphaned message on mount.
+  useEffect(() => {
+    for (const msg of messagesRef.current) {
+      if (
+        msg.mid &&
+        msg.deliveryStatus === "retrying" &&
+        !retryTimers.current.has(msg.mid)
+      ) {
+        const location =
+          msg.hasLocation && msg.lat && msg.lng
+            ? { latitude: parseFloat(msg.lat), longitude: parseFloat(msg.lng) }
+            : undefined;
+        armRetry(msg.mid, msg.text, location, 0);
+      }
+    }
+    // Intentionally run only once on mount -- subsequent "retrying" messages
+    // are already tracked by the timer that put them in that state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   /** Manual resend for a message whose auto-retry window gave up. */
   const handleResend = useCallback(
     (msg: ReturnType<typeof getMessages>[number]) => {
