@@ -93,10 +93,20 @@ export default function ChatThreadScreen() {
   // ── Bounded auto-retry for delivery receipts ─────────────────────────────
   // MTALK is fire-and-forget at the radio layer -- a lost packet or a lost
   // CDK:MACK receipt on the way back otherwise leaves a message stuck in
-  // "sent" forever with no feedback. Wait a few seconds for each MID, and
-  // if no CDK:MACK (markDelivered) has arrived, resend the same MID up to
-  // twice with backoff before giving up and surfacing a manual resend.
-  const RETRY_DELAYS_MS = [5000, 8000, 12000];
+  // "sent" forever with no feedback. Wait for each MID, and if no CDK:MACK
+  // (markDelivered) has arrived, resend the same MID once with backoff
+  // before giving up and surfacing a manual resend.
+  //
+  // Tuned to resend LESS often (was up to 2 automatic resends starting at
+  // 5s): on a multi-hop mesh the round trip for an ACK can easily take
+  // longer than 5s, so firing that early was mostly resending messages
+  // that were already on their way to being delivered -- doubling airtime/
+  // battery use across the mesh for no benefit (and, until the firmware
+  // de-duped repeated MIDs on receive, could show the same message twice
+  // on the recipient's screen). Total time-to-"failed" is barely changed
+  // (27s vs 25s) so the user-visible UX (a "retrying" badge appears, then
+  // either "delivered" or a tap-to-resend prompt) is effectively the same.
+  const RETRY_DELAYS_MS = [9000, 18000];
   const messagesRef = useRef(messages);
   useEffect(() => {
     messagesRef.current = messages;
