@@ -22,6 +22,7 @@ import {
 import { SerialStatusBanner } from "@/components/serial-status-banner";
 import { useAddressBookCtx } from "@/contexts/address-book-context";
 import { useChatStoreCtx } from "@/contexts/chat-store-context";
+import { useEsp32DataCtx } from "@/contexts/esp32-data-context";
 import { useLocationCtx } from "@/contexts/location-context";
 import { useSerial } from "@/contexts/serial-context";
 import { useToast } from "@/contexts/toast-context";
@@ -55,6 +56,11 @@ export default function ChatThreadScreen() {
   const router = useRouter();
 
   const { status, sendMTalk } = useSerial();
+  const { lastFrame } = useEsp32DataCtx();
+  const lastFrameRef = useRef(lastFrame);
+  useEffect(() => {
+    lastFrameRef.current = lastFrame;
+  }, [lastFrame]);
   const insets = useSafeAreaInsets();
   const {
     conversations,
@@ -386,7 +392,22 @@ export default function ChatThreadScreen() {
 
   /** Re-send every open message's text, unmodified, to every selected peer
    *  -- one send at a time (see FORWARD_SEND_GAP_MS above), never
-   *  concurrently, across the whole peer x message batch. */
+   *  concurrently, across the whole peer x message batch.
+   *
+   *  `sendMTalk` only resolves once the command is written over USB/BLE --
+   *  it does NOT wait for or parse the firmware's reply, so a successful
+   *  await here just means "the ESP32 received the command", not "it was
+   *  queued for the radio". If the single-slot outgoing LoRa queue is still
+   *  busy with the previous forwarded message, the firmware answers with
+   *  `CDK:ERR,MSG:queue full` -- which was previously ignored entirely,
+   *  making the tail end of a multi-message forward (the one most likely to
+   *  land while the queue is still draining) silently never go out even
+   *  though the UI reported it as sent. Give the firmware a brief moment to
+   *  reply after each write and, if it rejects with a queue-full error,
+   *  retry that same message with backoff before moving on. */
+  const QUEUE_FULL_SETTLE_MS = 400;
+  const QUEUE_FULL_RETRY_DELAYS_MS = [1000, 2500];
+
   const commitForward = useCallback(async () => {
     if (!forwardMsgs || forwardMsgs.length === 0 || forwardSelected.size === 0)
       return;
@@ -403,14 +424,53 @@ export default function ChatThreadScreen() {
     let failCount = 0;
     for (const target of targets) {
       for (const msg of forwardMsgs) {
-        try {
-          const mid = makeMid();
-          await sendMTalk(target, msg.text, undefined, mid);
+        const mid = makeMid();
+        let queued = false;
+        let transportError = false;
+        for (
+          let attempt = 0;
+          attempt <= QUEUE_FULL_RETRY_DELAYS_MS.length;
+          attempt++
+        ) {
+          const before = lastFrameRef.current;
+          try {
+            await sendMTalk(target, msg.text, undefined, mid);
+          } catch {
+            transportError = true;
+            break;
+          }
+          // Give the firmware a moment to reply before trusting the write.
+          await new Promise((resolve) =>
+            setTimeout(resolve, QUEUE_FULL_SETTLE_MS),
+          );
+          const after = lastFrameRef.current;
+          const queueFull =
+            !!after &&
+            after !== before &&
+            after.type === "ERR" &&
+            /queue full/i.test(after.message);
+          if (!queueFull) {
+            queued = true;
+            break;
+          }
+          if (attempt < QUEUE_FULL_RETRY_DELAYS_MS.length) {
+            await new Promise((resolve) =>
+              setTimeout(resolve, QUEUE_FULL_RETRY_DELAYS_MS[attempt]),
+            );
+          }
+        }
+        if (queued) {
           storAddSent(target, msg.text, undefined, mid);
           armRetry(target, mid, msg.text, undefined, 0);
           okCount++;
-        } catch {
+        } else {
           failCount++;
+          if (!transportError) {
+            showToast(
+              `"${msg.text.slice(0, 24)}${msg.text.length > 24 ? "…" : ""}" to ${target} dropped: radio queue full.`,
+              "warning",
+            );
+          }
         }
         sendIndex++;
         setForwardProgress({ done: sendIndex, total: totalSends });
