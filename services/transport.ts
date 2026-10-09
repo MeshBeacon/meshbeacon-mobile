@@ -195,6 +195,153 @@ export type IncomingFrame =
 
 export type FrameCallback = (frame: IncomingFrame) => void;
 
+// ── Outbound text sanitisation ────────────────────────────────────────────────
+
+/**
+ * Normalise free-text message bodies before they're embedded in a CDK: frame.
+ *
+ * - Commas are replaced with semicolons so the CSV-style frame isn't broken.
+ * - Curly/typographic quotes that iOS and Android keyboards silently
+ *   substitute for straight quotes (the "smart punctuation" autocorrect
+ *   feature — there is no React Native prop to disable it) are mapped back
+ *   to plain ASCII. Both transports encode TEXT one "byte" per UTF-16 code
+ *   unit (hex pairs over USB serial, `btoa()` over BLE); any character above
+ *   code point 255 either corrupts the frame or throws outright, which is
+ *   why typing an apostrophe appeared to silently fail to send.
+ */
+export function sanitizeFrameText(text: string): string {
+  return text
+    .replace(/[\u2018\u2019\u201A\u2032]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u2033]/g, '"')
+    .replace(/,/g, ";")
+    .trim();
+}
+
+/**
+ * Encode a JS string as UTF-8 and return it as a "binary string" — one JS
+ * char per output byte (code 0–255). This is the representation the wire
+ * encoders (`toHex` in serial.ts, `toBase64` in ble.ts) expect, since both
+ * assume one byte per character. Pure ASCII input passes through unchanged.
+ * Lets non-ASCII TEXT content (emoji, accented letters, CJK, etc.) survive
+ * the byte-oriented hex/base64 encodings instead of corrupting the frame.
+ */
+export function utf8Encode(str: string): string {
+  let out = "";
+  for (let i = 0; i < str.length; i++) {
+    let codePoint = str.charCodeAt(i);
+    // Combine a valid UTF-16 surrogate pair (e.g. emoji) into one code point.
+    if (codePoint >= 0xd800 && codePoint <= 0xdbff && i + 1 < str.length) {
+      const low = str.charCodeAt(i + 1);
+      if (low >= 0xdc00 && low <= 0xdfff) {
+        codePoint = 0x10000 + (codePoint - 0xd800) * 0x400 + (low - 0xdc00);
+        i++;
+      }
+    }
+    if (codePoint < 0x80) {
+      out += String.fromCharCode(codePoint);
+    } else if (codePoint < 0x800) {
+      out += String.fromCharCode(
+        0xc0 | (codePoint >> 6),
+        0x80 | (codePoint & 0x3f),
+      );
+    } else if (codePoint < 0x10000) {
+      out += String.fromCharCode(
+        0xe0 | (codePoint >> 12),
+        0x80 | ((codePoint >> 6) & 0x3f),
+        0x80 | (codePoint & 0x3f),
+      );
+    } else {
+      out += String.fromCharCode(
+        0xf0 | (codePoint >> 18),
+        0x80 | ((codePoint >> 12) & 0x3f),
+        0x80 | ((codePoint >> 6) & 0x3f),
+        0x80 | (codePoint & 0x3f),
+      );
+    }
+  }
+  return out;
+}
+
+/**
+ * Decode a "binary string" (one char per raw byte, 0–255) produced by the
+ * hex/base64 wire decoders back into a proper JS Unicode string. Inverse of
+ * `utf8Encode`. Malformed/truncated sequences fall back to the raw byte
+ * value per char rather than throwing, so a corrupted frame never crashes
+ * the receive pipeline.
+ */
+export function utf8Decode(bin: string): string {
+  let out = "";
+  let i = 0;
+  while (i < bin.length) {
+    const b0 = bin.charCodeAt(i);
+    if (b0 < 0x80) {
+      out += String.fromCharCode(b0);
+      i++;
+      continue;
+    }
+    if (b0 >= 0xc2 && b0 <= 0xdf && i + 1 < bin.length) {
+      const b1 = bin.charCodeAt(i + 1);
+      if ((b1 & 0xc0) === 0x80) {
+        out += String.fromCharCode(((b0 & 0x1f) << 6) | (b1 & 0x3f));
+        i += 2;
+        continue;
+      }
+    } else if (b0 >= 0xe0 && b0 <= 0xef && i + 2 < bin.length) {
+      const b1 = bin.charCodeAt(i + 1);
+      const b2 = bin.charCodeAt(i + 2);
+      if ((b1 & 0xc0) === 0x80 && (b2 & 0xc0) === 0x80) {
+        out += String.fromCharCode(
+          ((b0 & 0x0f) << 12) | ((b1 & 0x3f) << 6) | (b2 & 0x3f),
+        );
+        i += 3;
+        continue;
+      }
+    } else if (b0 >= 0xf0 && b0 <= 0xf4 && i + 3 < bin.length) {
+      const b1 = bin.charCodeAt(i + 1);
+      const b2 = bin.charCodeAt(i + 2);
+      const b3 = bin.charCodeAt(i + 3);
+      if (
+        (b1 & 0xc0) === 0x80 &&
+        (b2 & 0xc0) === 0x80 &&
+        (b3 & 0xc0) === 0x80
+      ) {
+        let cp =
+          ((b0 & 0x07) << 18) |
+          ((b1 & 0x3f) << 12) |
+          ((b2 & 0x3f) << 6) |
+          (b3 & 0x3f);
+        cp -= 0x10000;
+        out += String.fromCharCode(0xd800 + (cp >> 10), 0xdc00 + (cp & 0x3ff));
+        i += 4;
+        continue;
+      }
+    }
+    // Not a valid/complete UTF-8 sequence — keep the raw byte so data is
+    // never silently dropped.
+    out += String.fromCharCode(b0);
+    i++;
+  }
+  return out;
+}
+
+/**
+ * Append the trailing newline, UTF-8-encode the frame to a wire-ready
+ * "binary string", and verify it still fits within MAX_FRAME_BYTES. Non-ASCII
+ * characters expand to multiple bytes, so this must be checked post-encoding
+ * rather than against the original string length.
+ */
+export function encodeFrameForWire(frame: string): string {
+  const withNewline = frame.endsWith("\n") ? frame : frame + "\n";
+  const encoded = utf8Encode(withNewline);
+  if (encoded.length > MAX_FRAME_BYTES) {
+    throw new Error(
+      `Message too long once encoded (${encoded.length} bytes, max ${MAX_FRAME_BYTES}). ` +
+        "Shorten it — emoji and non-Latin characters use multiple bytes each.",
+    );
+  }
+  return encoded;
+}
+
 // ── Parser ────────────────────────────────────────────────────────────────────
 
 const FRAME_PREFIX = "CDK:";
@@ -355,7 +502,11 @@ export class LineBuffer {
     this.buf += chunk;
     const lines = this.buf.split(/\r?\n/);
     this.buf = lines.pop() ?? ""; // last element is the incomplete tail
-    return lines.filter((l) => l.length > 0);
+    // Each popped line is the full raw byte sequence for one frame (as a
+    // "binary string", one char per byte) — UTF-8-decode it here so non-ASCII
+    // TEXT content round-trips correctly. Splitting on \n above is byte-safe
+    // since 0x0A never appears as a UTF-8 continuation/lead byte.
+    return lines.filter((l) => l.length > 0).map(utf8Decode);
   }
 
   clear() {

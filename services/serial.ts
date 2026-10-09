@@ -17,7 +17,12 @@ import type {
     StatusCallback,
     TransportStatus,
 } from "./transport";
-import { LineBuffer, parseIncomingLine } from "./transport";
+import {
+    encodeFrameForWire,
+    LineBuffer,
+    parseIncomingLine,
+    sanitizeFrameText,
+} from "./transport";
 
 // Load the native module only on Android. On iOS the module does not exist and
 // accessing it would throw "Cannot read property 'getConstants' of null".
@@ -259,10 +264,12 @@ class SerialService implements ITransport {
     if (!this.port) {
       throw new Error("Not connected to an ESP32 device.");
     }
-    // Append newline so the ESP32 can use Serial.readStringUntil('\n')
-    const frame = message.endsWith("\n") ? message : message + "\n";
+    // Append newline so the ESP32 can use Serial.readStringUntil('\n'), and
+    // UTF-8-encode so non-ASCII TEXT content (emoji, accented letters, CJK,
+    // etc.) survives the byte-oriented hex wire encoding.
+    const encoded = encodeFrameForWire(message);
     try {
-      await this.port.send(toHex(frame));
+      await this.port.send(toHex(encoded));
     } catch (err) {
       // Send failed — cable likely unplugged
       console.warn("[CDK/Serial] send failed, disconnecting:", err);
@@ -303,8 +310,7 @@ class SerialService implements ITransport {
       opts.urgency === "low" ? 0 : opts.urgency === "medium" ? 1 : 2;
     const lat = opts.location ? opts.location.latitude.toFixed(6) : "none";
     const lng = opts.location ? opts.location.longitude.toFixed(6) : "none";
-    // Sanitise text: strip commas so the simple CSV protocol stays intact
-    const text = opts.text.replace(/,/g, ";").trim();
+    const text = sanitizeFrameText(opts.text);
     const frame = `${FRAME_SOURCE}:MSG,URGENCY:${urgencyCode},LAT:${lat},LNG:${lng},TEXT:${text}`;
     await this.sendRaw(frame);
   }
@@ -322,7 +328,7 @@ class SerialService implements ITransport {
     if (targetId.length !== 8) {
       throw new Error("MTALK target ID must be exactly 8 characters.");
     }
-    const sanitised = text.replace(/,/g, ";").trim();
+    const sanitised = sanitizeFrameText(text);
     const lat = location ? location.latitude.toFixed(6) : "none";
     const lng = location ? location.longitude.toFixed(6) : "none";
     const midSuffix = mid ? `,MID:${mid}` : "";

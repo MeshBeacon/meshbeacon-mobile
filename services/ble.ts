@@ -17,7 +17,7 @@ import type {
     StatusCallback,
     TransportStatus,
 } from "./transport";
-import { LineBuffer, parseIncomingLine } from "./transport";
+import { encodeFrameForWire, LineBuffer, parseIncomingLine, sanitizeFrameText } from "./transport";
 
 // ── NUS constants ──────────────────────────────────────────────────────────────
 const NUS_SERVICE = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
@@ -55,10 +55,12 @@ export interface ScannedDevice {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/** Encode a plain ASCII string to base64 (BLE-PLX requires base64). */
+/** Encode a byte-per-char "binary string" to base64 (BLE-PLX requires base64). */
 function toBase64(str: string): string {
-  // All CDK frames are pure ASCII (0–127).  btoa() handles ASCII natively
-  // and is available on both JavaScriptCore (iOS) and Hermes (Android ≥ RN 0.71).
+  // Callers (sendRaw) always pass a string already UTF-8-encoded via
+  // `encodeFrameForWire`/`utf8Encode`, so every char code is 0–255 — within
+  // the Latin-1 range btoa() requires. btoa() handles this natively and is
+  // available on both JavaScriptCore (iOS) and Hermes (Android ≥ RN 0.71).
   // Using btoa(str) directly — without the unescape(encodeURIComponent()) wrapper
   // — avoids the deprecated `unescape` global which Hermes may handle differently
   // from JavaScriptCore on non-ASCII sequences.
@@ -372,7 +374,10 @@ class BleService implements ITransport {
 
   private async sendRaw(frame: string): Promise<void> {
     if (!this.device) throw new Error("Not connected to an ESP32 device.");
-    const payload = frame.endsWith("\n") ? frame : frame + "\n";
+    // UTF-8-encode so non-ASCII TEXT content (emoji, accented letters, CJK,
+    // etc.) survives the byte-oriented base64 wire encoding; also verifies
+    // the frame still fits within MAX_FRAME_BYTES post-encoding.
+    const encoded = encodeFrameForWire(frame);
 
     // The ESP32's NUS implementation delivers each GATT write as a separate
     // callback — it does NOT reassemble multiple writes into one frame.
@@ -387,7 +392,7 @@ class BleService implements ITransport {
     // 4/3 — the actual bytes on the wire are ceil(N/3)*4, not N.
     // Check against the encoded size so we never send a write that exceeds the
     // negotiated ATT MTU payload.
-    const encodedLen = Math.ceil(payload.length / 3) * 4;
+    const encodedLen = Math.ceil(encoded.length / 3) * 4;
     if (encodedLen > this.mtuPayload) {
       throw new Error(
         `Frame too large for BLE MTU: ${encodedLen} B (base64) > ${this.mtuPayload} B. ` +
@@ -403,7 +408,7 @@ class BleService implements ITransport {
       await this.device.writeCharacteristicWithoutResponseForService(
         NUS_SERVICE,
         NUS_RX_CHAR,
-        toBase64(payload),
+        toBase64(encoded),
       );
     } catch (writeErr) {
       // On Android, a stale GATT connection can silently die without triggering
@@ -457,7 +462,7 @@ class BleService implements ITransport {
       opts.urgency === "low" ? 0 : opts.urgency === "medium" ? 1 : 2;
     const lat = opts.location ? opts.location.latitude.toFixed(6) : "none";
     const lng = opts.location ? opts.location.longitude.toFixed(6) : "none";
-    const text = opts.text.replace(/,/g, ";").trim();
+    const text = sanitizeFrameText(opts.text);
     const frame = `${FRAME_SOURCE}:MSG,URGENCY:${urgencyCode},LAT:${lat},LNG:${lng},TEXT:${text}`;
     await this.sendRaw(frame);
   }
@@ -475,7 +480,7 @@ class BleService implements ITransport {
     if (targetId.length !== 8) {
       throw new Error("MTALK target ID must be exactly 8 characters.");
     }
-    const sanitised = text.replace(/,/g, ";").trim();
+    const sanitised = sanitizeFrameText(text);
     const lat = location ? location.latitude.toFixed(6) : "none";
     const lng = location ? location.longitude.toFixed(6) : "none";
     const midSuffix = mid ? `,MID:${mid}` : "";

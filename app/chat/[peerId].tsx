@@ -57,6 +57,7 @@ export default function ChatThreadScreen() {
   const { status, sendMTalk } = useSerial();
   const insets = useSafeAreaInsets();
   const {
+    conversations,
     getMessages,
     addSent: storAddSent,
     markRead,
@@ -146,17 +147,17 @@ export default function ChatThreadScreen() {
           }
           armRetry(mid, text, location, step + 1);
         } else {
+          // No toast here -- the message bubble already shows a persistent
+          // "tap to resend" icon (see deliveryStatus === "failed" below),
+          // so a toast that auto-dismisses is redundant and just interrupts
+          // the user for something the UI already surfaces durably.
           markFailed(mid);
           retryTimers.current.delete(mid);
-          showToast(
-            "Message couldn't be delivered. Tap it to resend.",
-            "warning",
-          );
         }
       }, RETRY_DELAYS_MS[step]);
       retryTimers.current.set(mid, timer);
     },
-    [clearRetryTimer, markFailed, markRetrying, peerId, sendMTalk, showToast],
+    [clearRetryTimer, markFailed, markRetrying, peerId, sendMTalk],
   );
 
   // Clear all pending retry timers on unmount.
@@ -242,6 +243,143 @@ export default function ChatThreadScreen() {
   const [message, setMessage] = useState("");
   const [attachGps, setAttachGps] = useState(true);
   const [sending, setSending] = useState(false);
+
+  // ── Forward message modal ─────────────────────────────────────────────────
+  // Forwarding to several peers must go out one at a time: the ESP32 has a
+  // single half-duplex LoRa radio with its own outgoing queue (it can reply
+  // "CDK:ERR,MSG:queue full" -- see CDK_PROTOCOL.md), so firing concurrent
+  // MTALK writes risks overrunning it or colliding on-air. A short gap is
+  // left between each send to give the radio breathing room.
+  const FORWARD_SEND_GAP_MS = 350;
+
+  const [forwardMsg, setForwardMsg] = useState<ReturnType<
+    typeof getMessages
+  >[number] | null>(null);
+  const [forwardPeerDraft, setForwardPeerDraft] = useState("");
+  const [forwardSelected, setForwardSelected] = useState<Set<string>>(
+    new Set(),
+  );
+  const [forwarding, setForwarding] = useState(false);
+
+  /** Other known peers to forward to -- open conversations first, then any
+   *  address book contacts that don't have a thread yet. */
+  const forwardTargets = useMemo(() => {
+    const seen = new Set<string>();
+    const targets: { peerId: string; name?: string }[] = [];
+    for (const c of conversations) {
+      if (c.peerId === peerId) continue;
+      seen.add(c.peerId);
+      targets.push({
+        peerId: c.peerId,
+        name: contacts.find((ct) => ct.duckId === c.peerId)?.name,
+      });
+    }
+    for (const c of contacts) {
+      if (c.duckId === peerId || seen.has(c.duckId)) continue;
+      seen.add(c.duckId);
+      targets.push({ peerId: c.duckId, name: c.name });
+    }
+    // Include any manually-entered IDs that aren't an existing conversation
+    // or contact, so they still render (checked) in the picker list.
+    for (const id of forwardSelected) {
+      if (!seen.has(id)) targets.push({ peerId: id });
+    }
+    return targets;
+  }, [conversations, contacts, peerId, forwardSelected]);
+
+  const openForward = useCallback(
+    (msg: ReturnType<typeof getMessages>[number]) => {
+      setForwardPeerDraft("");
+      setForwardSelected(new Set());
+      setForwardMsg(msg);
+    },
+    [],
+  );
+
+  const closeForward = useCallback(() => {
+    setForwardMsg(null);
+    setForwardPeerDraft("");
+    setForwardSelected(new Set());
+  }, []);
+
+  const toggleForwardTarget = useCallback((id: string) => {
+    setForwardSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  /** Add the manually-typed Duck ID to the selection. */
+  const addForwardDraft = useCallback(() => {
+    const target = forwardPeerDraft.trim().toUpperCase();
+    if (target.length !== 8) {
+      showToast("Duck ID must be 8 characters.", "warning");
+      return;
+    }
+    if (target === peerId) {
+      showToast("Already in this conversation.", "warning");
+      return;
+    }
+    setForwardSelected((prev) => new Set(prev).add(target));
+    setForwardPeerDraft("");
+  }, [forwardPeerDraft, peerId, showToast]);
+
+  /** Re-send the open message's text, unmodified, to every selected peer --
+   *  one at a time (see FORWARD_SEND_GAP_MS above), never concurrently. */
+  const commitForward = useCallback(async () => {
+    if (!forwardMsg || forwardSelected.size === 0) return;
+    if (status === "disconnected" || status === "error") {
+      showToast("Connect to the device first.", "error");
+      return;
+    }
+    setForwarding(true);
+    const targets = Array.from(forwardSelected);
+    let okCount = 0;
+    const failed: string[] = [];
+    for (let i = 0; i < targets.length; i++) {
+      const target = targets[i];
+      try {
+        const mid = makeMid();
+        await sendMTalk(target, forwardMsg.text, undefined, mid);
+        storAddSent(target, forwardMsg.text, undefined, mid);
+        okCount++;
+      } catch {
+        failed.push(target);
+      }
+      if (i < targets.length - 1) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, FORWARD_SEND_GAP_MS),
+        );
+      }
+    }
+    setForwarding(false);
+    if (failed.length === 0) {
+      showToast(
+        okCount === 1
+          ? `Forwarded to ${targets[0]}.`
+          : `Forwarded to ${okCount} peers.`,
+        "success",
+      );
+      closeForward();
+    } else if (okCount === 0) {
+      showToast(`Forward failed for all ${failed.length} peer(s).`, "error");
+    } else {
+      showToast(
+        `Forwarded to ${okCount}, failed for ${failed.length}.`,
+        "warning",
+      );
+    }
+  }, [
+    forwardMsg,
+    forwardSelected,
+    status,
+    sendMTalk,
+    storAddSent,
+    showToast,
+    closeForward,
+  ]);
 
   // ── Scroll to bottom on new messages ─────────────────────────────────────
   useEffect(() => {
@@ -337,6 +475,7 @@ export default function ChatThreadScreen() {
             {/* ── History ── */}
             <ScrollView
               ref={scrollRef}
+              style={styles.flex}
               contentContainerStyle={styles.list}
               showsVerticalScrollIndicator={false}
               onContentSizeChange={() => {
@@ -390,11 +529,14 @@ export default function ChatThreadScreen() {
                           : styles.bubbleColReceived,
                       ]}
                     >
-                      <View
+                      <Pressable
                         style={[
                           styles.bubble,
                           isSent ? styles.bubbleSent : styles.bubbleReceived,
                         ]}
+                        onLongPress={() => openForward(msg)}
+                        delayLongPress={350}
+                        accessibilityLabel="Long press to forward this message"
                       >
                         <Text
                           style={[
@@ -406,7 +548,7 @@ export default function ChatThreadScreen() {
                         >
                           {msg.text}
                         </Text>
-                      </View>
+                      </Pressable>
 
                       <View
                         style={[
@@ -696,6 +838,142 @@ export default function ChatThreadScreen() {
               ))
             )}
           </ScrollView>
+        </View>
+      </Modal>
+
+      {/* ── Forward Message Modal ── */}
+      <Modal
+        visible={!!forwardMsg}
+        animationType="slide"
+        onRequestClose={closeForward}
+      >
+        <View
+          style={[
+            styles.abModal,
+            { paddingTop: insets.top, paddingBottom: insets.bottom },
+          ]}
+        >
+          <View style={styles.abHeader}>
+            <MaterialIcons name="forward" size={20} color="#f27f0d" />
+            <Text style={styles.abTitle}>Forward Message</Text>
+            <Pressable style={styles.abCloseBtn} onPress={closeForward}>
+              <MaterialIcons name="close" size={22} color="#181411" />
+            </Pressable>
+          </View>
+
+          {forwardMsg && (
+            <View style={styles.fwPreview}>
+              <Text style={styles.fwPreviewLabel}>Message</Text>
+              <Text style={styles.fwPreviewText} numberOfLines={3}>
+                {forwardMsg.text}
+              </Text>
+            </View>
+          )}
+
+          <View style={styles.modalSection}>
+            <Text style={styles.modalLabel}>Enter Duck ID</Text>
+            <View style={styles.draftRow}>
+              <TextInput
+                value={forwardPeerDraft}
+                onChangeText={(v) => setForwardPeerDraft(v.toUpperCase())}
+                placeholder="8-character Duck ID"
+                placeholderTextColor="#8a7560"
+                maxLength={8}
+                autoCapitalize="characters"
+                style={styles.draftInput}
+                onSubmitEditing={addForwardDraft}
+                returnKeyType="done"
+              />
+              <Pressable
+                style={[
+                  styles.draftBtn,
+                  forwardPeerDraft.length !== 8 && { opacity: 0.4 },
+                ]}
+                disabled={forwardPeerDraft.length !== 8}
+                onPress={addForwardDraft}
+              >
+                <MaterialIcons name="add" size={20} color="#fff" />
+              </Pressable>
+            </View>
+          </View>
+
+          <View style={styles.abDivider} />
+
+          {/* Tap a peer to select/deselect it -- sends go out one at a
+              time when "Forward" is pressed below (see FORWARD_SEND_GAP_MS). */}
+          <ScrollView
+            style={styles.flex}
+            contentContainerStyle={styles.abList}
+            showsVerticalScrollIndicator={false}
+          >
+            {forwardTargets.length === 0 ? (
+              <View style={styles.abEmpty}>
+                <MaterialIcons name="forward" size={48} color="#d1c5b8" />
+                <Text style={styles.abEmptyTitle}>No other conversations</Text>
+                <Text style={styles.abEmptyHint}>
+                  Enter a Duck ID above to forward there
+                </Text>
+              </View>
+            ) : (
+              forwardTargets.map((t) => {
+                const isSelected = forwardSelected.has(t.peerId);
+                return (
+                  <Pressable
+                    key={t.peerId}
+                    style={[
+                      styles.abContactRow,
+                      isSelected && styles.fwContactRowSelected,
+                    ]}
+                    disabled={forwarding}
+                    onPress={() => toggleForwardTarget(t.peerId)}
+                  >
+                    <View style={styles.abAvatar}>
+                      <Text style={styles.abAvatarText}>
+                        {(t.name ?? t.peerId).charAt(0).toUpperCase()}
+                      </Text>
+                    </View>
+                    <View style={styles.abContactInfo}>
+                      <Text style={styles.abContactName}>
+                        {t.name ?? t.peerId}
+                      </Text>
+                      <Text style={styles.abContactId}>{t.peerId}</Text>
+                    </View>
+                    <MaterialIcons
+                      name={isSelected ? "check-box" : "check-box-outline-blank"}
+                      size={22}
+                      color={isSelected ? "#f27f0d" : "#c8bdb0"}
+                    />
+                  </Pressable>
+                );
+              })
+            )}
+          </ScrollView>
+
+          <View style={styles.fwFooter}>
+            <Pressable
+              style={[
+                styles.fwForwardBtn,
+                (forwardSelected.size === 0 || forwarding) && {
+                  opacity: 0.4,
+                },
+              ]}
+              disabled={forwardSelected.size === 0 || forwarding}
+              onPress={commitForward}
+            >
+              {forwarding ? (
+                <ActivityIndicator size={18} color="#fff" />
+              ) : (
+                <MaterialIcons name="send" size={18} color="#fff" />
+              )}
+              <Text style={styles.fwForwardBtnText}>
+                {forwarding
+                  ? "Sending…"
+                  : forwardSelected.size > 0
+                    ? `Forward to ${forwardSelected.size}`
+                    : "Forward"}
+              </Text>
+            </Pressable>
+          </View>
         </View>
       </Modal>
     </>
@@ -1016,4 +1294,67 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+
+  // Forward Message Modal
+  modalSection: { paddingHorizontal: 16, paddingVertical: 12, gap: 8 },
+  modalLabel: { fontSize: 13, fontWeight: "600", color: "#8a7560" },
+  draftRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  draftInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: "#f27f0d",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#181411",
+    letterSpacing: 1.5,
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+  },
+  draftBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    backgroundColor: "#f27f0d",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  fwPreview: {
+    margin: 16,
+    marginBottom: 0,
+    padding: 12,
+    borderRadius: 14,
+    backgroundColor: "#fdf9f5",
+    borderWidth: 1,
+    borderColor: "#f27f0d33",
+    gap: 4,
+  },
+  fwPreviewLabel: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#8a7560",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  fwPreviewText: { fontSize: 14, color: "#181411", lineHeight: 19 },
+  fwContactRowSelected: {
+    borderColor: "#f27f0d",
+    backgroundColor: "#fff5ea",
+  },
+  fwFooter: {
+    padding: 16,
+    borderTopWidth: 1,
+    borderTopColor: "#f0eeec",
+  },
+  fwForwardBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: "#f27f0d",
+  },
+  fwForwardBtnText: { fontSize: 15, fontWeight: "700", color: "#fff" },
 });

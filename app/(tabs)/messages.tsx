@@ -159,6 +159,7 @@ export default function MessagesScreen() {
           {/* ── History ── */}
           <ScrollView
             ref={scrollRef}
+            style={styles.flex}
             contentContainerStyle={styles.list}
             showsVerticalScrollIndicator={false}
             onContentSizeChange={() => {
