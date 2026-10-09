@@ -124,8 +124,14 @@ export default function ChatThreadScreen() {
     }
   }, []);
 
+  // `targetPeerId` is the actual destination the MID was sent to -- for a
+  // plain compose send that's always this screen's own `peerId`, but a
+  // forwarded message can target a *different* peer's thread, so both the
+  // resend and the delivery-status lookup must use the real destination,
+  // not the currently-open thread.
   const armRetry = useCallback(
     (
+      targetPeerId: string,
       mid: string,
       text: string,
       location: { latitude: number; longitude: number } | undefined,
@@ -133,7 +139,7 @@ export default function ChatThreadScreen() {
     ) => {
       clearRetryTimer(mid);
       const timer = setTimeout(async () => {
-        const current = messagesRef.current.find((m) => m.mid === mid);
+        const current = getMessages(targetPeerId).find((m) => m.mid === mid);
         if (!current || current.deliveryStatus === "delivered") {
           retryTimers.current.delete(mid);
           return;
@@ -141,11 +147,11 @@ export default function ChatThreadScreen() {
         if (step < RETRY_DELAYS_MS.length - 1) {
           markRetrying(mid);
           try {
-            await sendMTalk(peerId, text, location, mid);
+            await sendMTalk(targetPeerId, text, location, mid);
           } catch {
             // Ignore -- next scheduled check will try again or give up.
           }
-          armRetry(mid, text, location, step + 1);
+          armRetry(targetPeerId, mid, text, location, step + 1);
         } else {
           // No toast here -- the message bubble already shows a persistent
           // "tap to resend" icon (see deliveryStatus === "failed" below),
@@ -157,7 +163,7 @@ export default function ChatThreadScreen() {
       }, RETRY_DELAYS_MS[step]);
       retryTimers.current.set(mid, timer);
     },
-    [clearRetryTimer, markFailed, markRetrying, peerId, sendMTalk],
+    [clearRetryTimer, getMessages, markFailed, markRetrying, sendMTalk],
   );
 
   // Clear all pending retry timers on unmount.
@@ -187,7 +193,7 @@ export default function ChatThreadScreen() {
           msg.hasLocation && msg.lat && msg.lng
             ? { latitude: parseFloat(msg.lat), longitude: parseFloat(msg.lng) }
             : undefined;
-        armRetry(msg.mid, msg.text, location, 0);
+        armRetry(peerId, msg.mid, msg.text, location, 0);
       }
     }
     // Intentionally run only once on mount -- subsequent "retrying" messages
@@ -207,7 +213,7 @@ export default function ChatThreadScreen() {
       sendMTalk(peerId, msg.text, location, msg.mid).catch((err) => {
         showToast((err as Error).message, "error");
       });
-      armRetry(msg.mid, msg.text, location, 0);
+      armRetry(peerId, msg.mid, msg.text, location, 0);
     },
     [armRetry, markRetrying, peerId, sendMTalk, showToast],
   );
@@ -401,6 +407,7 @@ export default function ChatThreadScreen() {
           const mid = makeMid();
           await sendMTalk(target, msg.text, undefined, mid);
           storAddSent(target, msg.text, undefined, mid);
+          armRetry(target, mid, msg.text, undefined, 0);
           okCount++;
         } catch {
           failCount++;
@@ -437,6 +444,7 @@ export default function ChatThreadScreen() {
     status,
     sendMTalk,
     storAddSent,
+    armRetry,
     showToast,
     closeForward,
     cancelSelect,
@@ -486,7 +494,7 @@ export default function ChatThreadScreen() {
       const mid = makeMid();
       await sendMTalk(peerId, message.trim(), location, mid);
       addSent(message.trim(), location, mid);
-      armRetry(mid, message.trim(), location, 0);
+      armRetry(peerId, mid, message.trim(), location, 0);
       setMessage("");
       setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
     } catch (err) {
