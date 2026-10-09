@@ -244,17 +244,48 @@ export default function ChatThreadScreen() {
   const [attachGps, setAttachGps] = useState(true);
   const [sending, setSending] = useState(false);
 
+  // ── Multi-message selection (long-press a bubble to start) ───────────────
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedMsgIds, setSelectedMsgIds] = useState<Set<string>>(
+    new Set(),
+  );
+
+  const startSelect = useCallback((id: string) => {
+    setSelectMode(true);
+    setSelectedMsgIds(new Set([id]));
+  }, []);
+
+  const toggleMsgSelect = useCallback((id: string) => {
+    setSelectedMsgIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const cancelSelect = useCallback(() => {
+    setSelectMode(false);
+    setSelectedMsgIds(new Set());
+  }, []);
+
+  // Leaving the selection empty (deselecting the last message) exits
+  // selection mode automatically instead of leaving an empty toolbar up.
+  useEffect(() => {
+    if (selectMode && selectedMsgIds.size === 0) setSelectMode(false);
+  }, [selectMode, selectedMsgIds]);
+
   // ── Forward message modal ─────────────────────────────────────────────────
-  // Forwarding to several peers must go out one at a time: the ESP32 has a
-  // single half-duplex LoRa radio with its own outgoing queue (it can reply
-  // "CDK:ERR,MSG:queue full" -- see CDK_PROTOCOL.md), so firing concurrent
-  // MTALK writes risks overrunning it or colliding on-air. A short gap is
-  // left between each send to give the radio breathing room.
+  // Forwarding to several peers (or several messages) must go out one at a
+  // time: the ESP32 has a single half-duplex LoRa radio with its own
+  // outgoing queue (it can reply "CDK:ERR,MSG:queue full" -- see
+  // CDK_PROTOCOL.md), so firing concurrent MTALK writes risks overrunning it
+  // or colliding on-air. A short gap is left between every individual send.
   const FORWARD_SEND_GAP_MS = 350;
 
-  const [forwardMsg, setForwardMsg] = useState<ReturnType<
+  const [forwardMsgs, setForwardMsgs] = useState<ReturnType<
     typeof getMessages
-  >[number] | null>(null);
+  > | null>(null);
   const [forwardPeerDraft, setForwardPeerDraft] = useState("");
   const [forwardSelected, setForwardSelected] = useState<Set<string>>(
     new Set(),
@@ -288,19 +319,27 @@ export default function ChatThreadScreen() {
   }, [conversations, contacts, peerId, forwardSelected]);
 
   const openForward = useCallback(
-    (msg: ReturnType<typeof getMessages>[number]) => {
+    (msgs: ReturnType<typeof getMessages>) => {
       setForwardPeerDraft("");
       setForwardSelected(new Set());
-      setForwardMsg(msg);
+      setForwardMsgs(msgs);
     },
     [],
   );
 
   const closeForward = useCallback(() => {
-    setForwardMsg(null);
+    setForwardMsgs(null);
     setForwardPeerDraft("");
     setForwardSelected(new Set());
   }, []);
+
+  /** Open the peer-picker for every message currently checked in selection
+   *  mode, in the order they appear in the thread. */
+  const openForwardFromSelection = useCallback(() => {
+    const msgs = messages.filter((m) => selectedMsgIds.has(m.id));
+    if (msgs.length === 0) return;
+    openForward(msgs);
+  }, [messages, selectedMsgIds, openForward]);
 
   const toggleForwardTarget = useCallback((id: string) => {
     setForwardSelected((prev) => {
@@ -326,59 +365,65 @@ export default function ChatThreadScreen() {
     setForwardPeerDraft("");
   }, [forwardPeerDraft, peerId, showToast]);
 
-  /** Re-send the open message's text, unmodified, to every selected peer --
-   *  one at a time (see FORWARD_SEND_GAP_MS above), never concurrently. */
+  /** Re-send every open message's text, unmodified, to every selected peer
+   *  -- one send at a time (see FORWARD_SEND_GAP_MS above), never
+   *  concurrently, across the whole peer x message batch. */
   const commitForward = useCallback(async () => {
-    if (!forwardMsg || forwardSelected.size === 0) return;
+    if (!forwardMsgs || forwardMsgs.length === 0 || forwardSelected.size === 0)
+      return;
     if (status === "disconnected" || status === "error") {
       showToast("Connect to the device first.", "error");
       return;
     }
     setForwarding(true);
     const targets = Array.from(forwardSelected);
+    const totalSends = targets.length * forwardMsgs.length;
+    let sendIndex = 0;
     let okCount = 0;
-    const failed: string[] = [];
-    for (let i = 0; i < targets.length; i++) {
-      const target = targets[i];
-      try {
-        const mid = makeMid();
-        await sendMTalk(target, forwardMsg.text, undefined, mid);
-        storAddSent(target, forwardMsg.text, undefined, mid);
-        okCount++;
-      } catch {
-        failed.push(target);
-      }
-      if (i < targets.length - 1) {
-        await new Promise((resolve) =>
-          setTimeout(resolve, FORWARD_SEND_GAP_MS),
-        );
+    let failCount = 0;
+    for (const target of targets) {
+      for (const msg of forwardMsgs) {
+        try {
+          const mid = makeMid();
+          await sendMTalk(target, msg.text, undefined, mid);
+          storAddSent(target, msg.text, undefined, mid);
+          okCount++;
+        } catch {
+          failCount++;
+        }
+        sendIndex++;
+        if (sendIndex < totalSends) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, FORWARD_SEND_GAP_MS),
+          );
+        }
       }
     }
     setForwarding(false);
-    if (failed.length === 0) {
+    const msgWord = forwardMsgs.length === 1 ? "message" : "messages";
+    if (failCount === 0) {
       showToast(
-        okCount === 1
-          ? `Forwarded to ${targets[0]}.`
-          : `Forwarded to ${okCount} peers.`,
+        targets.length === 1
+          ? `Forwarded ${forwardMsgs.length} ${msgWord} to ${targets[0]}.`
+          : `Forwarded ${forwardMsgs.length} ${msgWord} to ${targets.length} peers.`,
         "success",
       );
       closeForward();
+      cancelSelect();
     } else if (okCount === 0) {
-      showToast(`Forward failed for all ${failed.length} peer(s).`, "error");
+      showToast(`Forward failed for all ${failCount} send(s).`, "error");
     } else {
-      showToast(
-        `Forwarded to ${okCount}, failed for ${failed.length}.`,
-        "warning",
-      );
+      showToast(`Sent ${okCount}, failed ${failCount}.`, "warning");
     }
   }, [
-    forwardMsg,
+    forwardMsgs,
     forwardSelected,
     status,
     sendMTalk,
     storAddSent,
     showToast,
     closeForward,
+    cancelSelect,
   ]);
 
   // ── Scroll to bottom on new messages ─────────────────────────────────────
@@ -445,30 +490,54 @@ export default function ChatThreadScreen() {
         >
           <View style={styles.container}>
             {/* ── Header ── */}
-            <View style={styles.header}>
-              <Pressable style={styles.backBtn} onPress={() => router.back()}>
-                <MaterialIcons name="arrow-back" size={24} color="#181411" />
-              </Pressable>
-              <View style={styles.headerInfo}>
-                <Text style={styles.headerPeerId} numberOfLines={1}>
-                  {contact?.name ?? peerId}
-                </Text>
-                {contact?.name && (
-                  <Text style={styles.headerPeerSub}>{peerId}</Text>
-                )}
+            {selectMode ? (
+              <View style={styles.header}>
+                <Pressable style={styles.backBtn} onPress={cancelSelect}>
+                  <MaterialIcons name="close" size={24} color="#181411" />
+                </Pressable>
+                <View style={styles.headerInfo}>
+                  <Text style={styles.headerPeerId}>
+                    {selectedMsgIds.size} selected
+                  </Text>
+                </View>
+                <Pressable
+                  style={[
+                    styles.abBtn,
+                    selectedMsgIds.size === 0 && { opacity: 0.4 },
+                  ]}
+                  disabled={selectedMsgIds.size === 0}
+                  onPress={openForwardFromSelection}
+                  accessibilityLabel="Forward selected messages"
+                >
+                  <MaterialIcons name="forward" size={22} color="#f27f0d" />
+                </Pressable>
               </View>
-              <Pressable
-                style={styles.abBtn}
-                onPress={() => setAbOpen(true)}
-                accessibilityLabel="Address book"
-              >
-                <MaterialIcons
-                  name={hasContact(peerId) ? "person" : "person-add"}
-                  size={22}
-                  color="#f27f0d"
-                />
-              </Pressable>
-            </View>
+            ) : (
+              <View style={styles.header}>
+                <Pressable style={styles.backBtn} onPress={() => router.back()}>
+                  <MaterialIcons name="arrow-back" size={24} color="#181411" />
+                </Pressable>
+                <View style={styles.headerInfo}>
+                  <Text style={styles.headerPeerId} numberOfLines={1}>
+                    {contact?.name ?? peerId}
+                  </Text>
+                  {contact?.name && (
+                    <Text style={styles.headerPeerSub}>{peerId}</Text>
+                  )}
+                </View>
+                <Pressable
+                  style={styles.abBtn}
+                  onPress={() => setAbOpen(true)}
+                  accessibilityLabel="Address book"
+                >
+                  <MaterialIcons
+                    name={hasContact(peerId) ? "person" : "person-add"}
+                    size={22}
+                    color="#f27f0d"
+                  />
+                </Pressable>
+              </View>
+            )}
 
             <SerialStatusBanner />
 
@@ -507,12 +576,14 @@ export default function ChatThreadScreen() {
 
               {messages.map((msg) => {
                 const isSent = msg.direction === "sent";
+                const isSelected = selectedMsgIds.has(msg.id);
                 return (
                   <View
                     key={msg.id}
                     style={[
                       styles.bubbleRow,
                       isSent ? styles.bubbleRowSent : styles.bubbleRowReceived,
+                      isSelected && styles.bubbleRowSelected,
                     ]}
                   >
                     {!isSent && (
@@ -534,9 +605,14 @@ export default function ChatThreadScreen() {
                           styles.bubble,
                           isSent ? styles.bubbleSent : styles.bubbleReceived,
                         ]}
-                        onLongPress={() => openForward(msg)}
+                        onPress={
+                          selectMode
+                            ? () => toggleMsgSelect(msg.id)
+                            : undefined
+                        }
+                        onLongPress={() => startSelect(msg.id)}
                         delayLongPress={350}
-                        accessibilityLabel="Long press to forward this message"
+                        accessibilityLabel="Long press to select messages to forward"
                       >
                         <Text
                           style={[
@@ -615,6 +691,17 @@ export default function ChatThreadScreen() {
                         </Text>
                       </View>
                     </View>
+
+                    {selectMode && (
+                      <MaterialIcons
+                        name={
+                          isSelected ? "check-box" : "check-box-outline-blank"
+                        }
+                        size={20}
+                        color={isSelected ? "#f27f0d" : "#c8bdb0"}
+                        style={styles.bubbleSelectCheck}
+                      />
+                    )}
                   </View>
                 );
               })}
@@ -843,7 +930,7 @@ export default function ChatThreadScreen() {
 
       {/* ── Forward Message Modal ── */}
       <Modal
-        visible={!!forwardMsg}
+        visible={!!forwardMsgs}
         animationType="slide"
         onRequestClose={closeForward}
       >
@@ -861,12 +948,28 @@ export default function ChatThreadScreen() {
             </Pressable>
           </View>
 
-          {forwardMsg && (
+          {forwardMsgs && (
             <View style={styles.fwPreview}>
-              <Text style={styles.fwPreviewLabel}>Message</Text>
-              <Text style={styles.fwPreviewText} numberOfLines={3}>
-                {forwardMsg.text}
+              <Text style={styles.fwPreviewLabel}>
+                {forwardMsgs.length === 1
+                  ? "Message"
+                  : `${forwardMsgs.length} Messages`}
               </Text>
+              {forwardMsgs.length === 1 ? (
+                <Text style={styles.fwPreviewText} numberOfLines={3}>
+                  {forwardMsgs[0].text}
+                </Text>
+              ) : (
+                forwardMsgs.map((m) => (
+                  <Text
+                    key={m.id}
+                    style={styles.fwPreviewText}
+                    numberOfLines={1}
+                  >
+                    {`• ${m.text}`}
+                  </Text>
+                ))
+              )}
             </View>
           )}
 
@@ -1029,6 +1132,14 @@ const styles = StyleSheet.create({
   bubbleRow: { flexDirection: "row", alignItems: "flex-end", gap: 8 },
   bubbleRowSent: { justifyContent: "flex-end" },
   bubbleRowReceived: { justifyContent: "flex-start" },
+  bubbleRowSelected: {
+    backgroundColor: "#f27f0d14",
+    borderRadius: 14,
+    marginHorizontal: -8,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  bubbleSelectCheck: { marginBottom: 18 },
   bubbleCol: { maxWidth: "78%", gap: 3 },
   bubbleColSent: { alignItems: "flex-end" },
   bubbleColReceived: { alignItems: "flex-start" },
