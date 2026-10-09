@@ -280,8 +280,16 @@ export default function ChatThreadScreen() {
   // time: the ESP32 has a single half-duplex LoRa radio with its own
   // outgoing queue (it can reply "CDK:ERR,MSG:queue full" -- see
   // CDK_PROTOCOL.md), so firing concurrent MTALK writes risks overrunning it
-  // or colliding on-air. A short gap is left between every individual send.
-  const FORWARD_SEND_GAP_MS = 350;
+  // or colliding on-air. A gap is left between every individual send -- this
+  // has to be generous (seconds, not milliseconds): the single-hop/multi-hop
+  // LoRa airtime plus the time for the firmware to actually drain its
+  // outgoing slot is far longer than it looks from the UI, and the existing
+  // delivery-receipt retry backoff below is tuned around ACKs that can take
+  // 9-18s+ on a multi-hop mesh. A gap that's too short doesn't error --the
+  // ESP32 just silently overwrites/drops whatever was still pending in its
+  // single-item outgoing slot, which is why only one of several forwarded
+  // messages was actually getting out over the air.
+  const FORWARD_SEND_GAP_MS = 2500;
 
   const [forwardMsgs, setForwardMsgs] = useState<ReturnType<
     typeof getMessages
@@ -291,6 +299,10 @@ export default function ChatThreadScreen() {
     new Set(),
   );
   const [forwarding, setForwarding] = useState(false);
+  const [forwardProgress, setForwardProgress] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
 
   /** Other known peers to forward to -- open conversations first, then any
    *  address book contacts that don't have a thread yet. */
@@ -331,6 +343,7 @@ export default function ChatThreadScreen() {
     setForwardMsgs(null);
     setForwardPeerDraft("");
     setForwardSelected(new Set());
+    setForwardProgress(null);
   }, []);
 
   /** Open the peer-picker for every message currently checked in selection
@@ -378,6 +391,7 @@ export default function ChatThreadScreen() {
     setForwarding(true);
     const targets = Array.from(forwardSelected);
     const totalSends = targets.length * forwardMsgs.length;
+    setForwardProgress({ done: 0, total: totalSends });
     let sendIndex = 0;
     let okCount = 0;
     let failCount = 0;
@@ -392,6 +406,7 @@ export default function ChatThreadScreen() {
           failCount++;
         }
         sendIndex++;
+        setForwardProgress({ done: sendIndex, total: totalSends });
         if (sendIndex < totalSends) {
           await new Promise((resolve) =>
             setTimeout(resolve, FORWARD_SEND_GAP_MS),
@@ -400,6 +415,7 @@ export default function ChatThreadScreen() {
       }
     }
     setForwarding(false);
+    setForwardProgress(null);
     const msgWord = forwardMsgs.length === 1 ? "message" : "messages";
     if (failCount === 0) {
       showToast(
@@ -578,13 +594,19 @@ export default function ChatThreadScreen() {
                 const isSent = msg.direction === "sent";
                 const isSelected = selectedMsgIds.has(msg.id);
                 return (
-                  <View
+                  <Pressable
                     key={msg.id}
                     style={[
                       styles.bubbleRow,
                       isSent ? styles.bubbleRowSent : styles.bubbleRowReceived,
                       isSelected && styles.bubbleRowSelected,
                     ]}
+                    onPress={
+                      selectMode ? () => toggleMsgSelect(msg.id) : undefined
+                    }
+                    onLongPress={() => startSelect(msg.id)}
+                    delayLongPress={350}
+                    accessibilityLabel="Long press to select messages to forward"
                   >
                     {!isSent && (
                       <View style={styles.avatar}>
@@ -600,19 +622,11 @@ export default function ChatThreadScreen() {
                           : styles.bubbleColReceived,
                       ]}
                     >
-                      <Pressable
+                      <View
                         style={[
                           styles.bubble,
                           isSent ? styles.bubbleSent : styles.bubbleReceived,
                         ]}
-                        onPress={
-                          selectMode
-                            ? () => toggleMsgSelect(msg.id)
-                            : undefined
-                        }
-                        onLongPress={() => startSelect(msg.id)}
-                        delayLongPress={350}
-                        accessibilityLabel="Long press to select messages to forward"
                       >
                         <Text
                           style={[
@@ -624,7 +638,7 @@ export default function ChatThreadScreen() {
                         >
                           {msg.text}
                         </Text>
-                      </Pressable>
+                      </View>
 
                       <View
                         style={[
@@ -702,7 +716,7 @@ export default function ChatThreadScreen() {
                         style={styles.bubbleSelectCheck}
                       />
                     )}
-                  </View>
+                  </Pressable>
                 );
               })}
             </ScrollView>
@@ -1070,7 +1084,9 @@ export default function ChatThreadScreen() {
               )}
               <Text style={styles.fwForwardBtnText}>
                 {forwarding
-                  ? "Sending…"
+                  ? forwardProgress
+                    ? `Sending ${forwardProgress.done}/${forwardProgress.total}…`
+                    : "Sending…"
                   : forwardSelected.size > 0
                     ? `Forward to ${forwardSelected.size}`
                     : "Forward"}
