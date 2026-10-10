@@ -23,6 +23,13 @@ interface ChatStoreCtx {
   ) => ChatMessage;
   /** Get the full message list for one peer thread. */
   getMessages: (peerId: string) => ChatMessage[];
+  /**
+   * Same as `getMessages` but safe to call from inside a callback created
+   * once and invoked much later (e.g. a delivery-retry `setTimeout`) --
+   * always reads live data instead of a snapshot frozen at closure-creation
+   * time.
+   */
+  getMessagesLive: (peerId: string) => ChatMessage[];
   /** Clear unread badge when the user opens a thread. */
   markRead: (peerId: string) => void;
   /** Bump unread counter for a peer on incoming MTALK. */

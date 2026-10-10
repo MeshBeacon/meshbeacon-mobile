@@ -14,7 +14,7 @@
  */
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 const STORAGE_KEY = "cdk-chat-v2";
 const LEGACY_MESSAGES_KEY = "cdk-chat-messages";
@@ -142,6 +142,23 @@ export function useChatStore() {
     if (loaded) persist({ threads, unread });
   }, [threads, unread, loaded]);
 
+  // Mirrors `threads` for `getMessages` below so it can read the *live*
+  // state at call time instead of whatever `threads` was at the moment the
+  // calling closure was created. This matters a lot for callers like the
+  // chat screen's delivery-retry timers: `armRetry(...)` is invoked
+  // synchronously right after `addSent(...)`, i.e. *before* React has
+  // flushed the state update and re-rendered with the new message. If
+  // `getMessages` closed over that pre-update `threads` (as it did when it
+  // depended on `[threads]` via useCallback), every `setTimeout` callback
+  // inside `armRetry` would capture that same stale, pre-send snapshot
+  // forever -- `getMessages(peerId).find((m) => m.mid === mid)` would
+  // never find the message it was created to track, silently no-op`ing
+  // the entire retry/failed-marking flow for every message, every time.
+  const threadsRef = useRef(threads);
+  useEffect(() => {
+    threadsRef.current = threads;
+  }, [threads]);
+
   // ── Derived conversation list ─────────────────────────────────────────────
 
   /** All known conversations sorted newest-first by last message timestamp. */
@@ -228,10 +245,32 @@ export function useChatStore() {
     [addMessage],
   );
 
-  /** Get the full message list for a specific peer thread. */
+  /**
+   * Get the full message list for a specific peer thread. Reads from
+   * `threadsRef` (not the `threads` state captured in this closure) so
+   * that callers which stash this function away for later -- e.g. the
+   * chat screen's retry timers -- always see live data, not a snapshot
+   * frozen at the time the function reference was handed out.
+   */
   const getMessages = useCallback(
     (peerId: string): ChatMessage[] => threads[peerId] ?? [],
     [threads],
+  );
+
+  /**
+   * Same as `getMessages`, but with a stable identity across renders and
+   * reading from `threadsRef` instead of closing over `threads`. Use this
+   * (not `getMessages`) from inside callbacks that get created once and
+   * invoked much later -- e.g. a `setTimeout` scheduled by a delivery-retry
+   * timer -- since `getMessages`'s identity (and the `threads` it closes
+   * over) changes on every thread update, which would otherwise permanently
+   * freeze such a callback's view of the data as of the moment it was
+   * created, before the very message it's tracking may have even been
+   * added yet.
+   */
+  const getMessagesLive = useCallback(
+    (peerId: string): ChatMessage[] => threadsRef.current[peerId] ?? [],
+    [],
   );
 
   /** Clear the unread badge for a peer (call when the user opens the thread). */
@@ -327,6 +366,7 @@ export function useChatStore() {
     addSent,
     addReceived,
     getMessages,
+    getMessagesLive,
     markRead,
     incrementUnread,
     markDelivered,

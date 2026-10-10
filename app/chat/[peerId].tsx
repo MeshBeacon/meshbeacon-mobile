@@ -65,6 +65,7 @@ export default function ChatThreadScreen() {
   const {
     conversations,
     getMessages,
+    getMessagesLive,
     addSent: storAddSent,
     markRead,
     markFailed,
@@ -145,7 +146,16 @@ export default function ChatThreadScreen() {
     ) => {
       clearRetryTimer(mid);
       const timer = setTimeout(async () => {
-        const current = getMessages(targetPeerId).find((m) => m.mid === mid);
+        // `getMessagesLive` (not `getMessages`) -- this callback is
+        // scheduled once and fires up to 27s later, so it must read live
+        // data at call time rather than a snapshot frozen when `armRetry`
+        // was invoked (which, for a message just sent in the same tick as
+        // `addSent`, would be *before* the message even existed yet,
+        // causing `current` to always be undefined and silently no-op
+        // the entire retry/failed flow).
+        const current = getMessagesLive(targetPeerId).find(
+          (m) => m.mid === mid,
+        );
         if (!current || current.deliveryStatus === "delivered") {
           retryTimers.current.delete(mid);
           return;
@@ -169,7 +179,7 @@ export default function ChatThreadScreen() {
       }, RETRY_DELAYS_MS[step]);
       retryTimers.current.set(mid, timer);
     },
-    [clearRetryTimer, getMessages, markFailed, markRetrying, sendMTalk],
+    [clearRetryTimer, getMessagesLive, markFailed, markRetrying, sendMTalk],
   );
 
   // Clear all pending retry timers on unmount.
