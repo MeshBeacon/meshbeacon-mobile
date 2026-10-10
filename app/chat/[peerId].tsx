@@ -464,6 +464,16 @@ export default function ChatThreadScreen() {
           armRetry(target, mid, msg.text, undefined, 0);
           okCount++;
         } else {
+          // Still persist the message so the user has something to look at
+          // and manually retry -- previously a dropped forward left no
+          // trace at all (just a toast that disappears), with no bubble
+          // and therefore no tap-to-resend affordance. Since we've already
+          // exhausted the queue-full retries (or hit a hard transport
+          // error), mark it "failed" immediately instead of waiting out
+          // the normal 27s ACK window for a send that never even reached
+          // the radio queue.
+          storAddSent(target, msg.text, undefined, mid);
+          markFailed(mid);
           failCount++;
           if (!transportError) {
             showToast(
@@ -505,6 +515,7 @@ export default function ChatThreadScreen() {
     sendMTalk,
     storAddSent,
     armRetry,
+    markFailed,
     showToast,
     closeForward,
     cancelSelect,
@@ -548,16 +559,25 @@ export default function ChatThreadScreen() {
       return;
     }
     setSending(true);
+    const text = message.trim();
+    const location =
+      attachGps && gps.status === "ready" ? gps.coords : undefined;
+    const mid = makeMid();
     try {
-      const location =
-        attachGps && gps.status === "ready" ? gps.coords : undefined;
-      const mid = makeMid();
-      await sendMTalk(peerId, message.trim(), location, mid);
-      addSent(message.trim(), location, mid);
-      armRetry(peerId, mid, message.trim(), location, 0);
+      await sendMTalk(peerId, text, location, mid);
+      addSent(text, location, mid);
+      armRetry(peerId, mid, text, location, 0);
       setMessage("");
       setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
     } catch (err) {
+      // The local write failed (e.g. BLE/serial link dropped mid-send) --
+      // still persist the message as "failed" so there's a bubble with a
+      // tap-to-resend icon instead of silently dropping it with just a
+      // toast that disappears and leaves nothing to retry (same root
+      // cause as the earlier forwarding bug).
+      addSent(text, location, mid);
+      markFailed(mid);
+      setMessage("");
       showToast((err as Error).message, "error");
     } finally {
       setSending(false);
