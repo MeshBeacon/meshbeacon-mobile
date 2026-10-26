@@ -1,0 +1,35 @@
+diff --git a/node_modules/react-native-usb-serialport-for-android/android/src/main/java/com/bastengao/usbserialport/UsbSerialportForAndroidModule.java b/node_modules/react-native-usb-serialport-for-android/android/src/main/java/com/bastengao/usbserialport/UsbSerialportForAndroidModule.java
+index 7e20282..876b76c 100644
+--- a/node_modules/react-native-usb-serialport-for-android/android/src/main/java/com/bastengao/usbserialport/UsbSerialportForAndroidModule.java
++++ b/node_modules/react-native-usb-serialport-for-android/android/src/main/java/com/bastengao/usbserialport/UsbSerialportForAndroidModule.java
+@@ -18,6 +18,8 @@ import com.facebook.react.bridge.WritableArray;
+ import com.facebook.react.bridge.WritableMap;
+ import com.facebook.react.module.annotations.ReactModule;
+ import com.facebook.react.modules.core.DeviceEventManagerModule;
++import com.hoho.android.usbserial.driver.CdcAcmSerialDriver;
++import com.hoho.android.usbserial.driver.ProbeTable;
+ import com.hoho.android.usbserial.driver.UsbSerialDriver;
+ import com.hoho.android.usbserial.driver.UsbSerialPort;
+ import com.hoho.android.usbserial.driver.UsbSerialProber;
+@@ -130,6 +132,21 @@ public class UsbSerialportForAndroidModule extends ReactContextBaseJavaModule im
+         }
+ 
+         UsbSerialDriver driver = UsbSerialProber.getDefaultProber().probeDevice(device);
++        if (driver == null) {
++            // The default prober only recognizes a hardcoded allow-list of
++            // VID/PID pairs for CDC-ACM devices. Plenty of legitimate,
++            // fully-standard CDC-ACM devices (e.g. Seeed nRF52840 boards like
++            // the Wio Tracker L1 Pro) aren't in that list even though they
++            // work fine as a plain CDC-ACM serial port -- confirmed against
++            // this exact device with a generic serial terminal app, whose
++            // broader custom probe table includes it. Fall back to treating
++            // the device's declared VID/PID as CDC-ACM directly instead of
++            // giving up, matching the upstream library's documented pattern
++            // for unlisted CDC-ACM devices.
++            ProbeTable customTable = new ProbeTable();
++            customTable.addProduct(device.getVendorId(), device.getProductId(), CdcAcmSerialDriver.class);
++            driver = new UsbSerialProber(customTable).probeDevice(device);
++        }
+         if (driver == null) {
+             promise.reject(CODE_DRIVER_NOT_FOND, "no driver for device");
+             return;
