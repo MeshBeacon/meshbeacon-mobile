@@ -57,7 +57,7 @@ export interface Esp32Data {
   broadcastAlerts: StoredBroadcast[];
   /** SOS alerts triggered by the hardware button on the ESP32, newest first. */
   deviceSosAlerts: DeviceSosFrame[];
-  /** Most recent SOS acknowledgment from the operator (via OpenDMS), or null. */
+  /** Most recent SOS acknowledgment from the operator (via MeshBeacon Ops), or null. */
   lastSosAck: SosAckFrame | null;
 }
 

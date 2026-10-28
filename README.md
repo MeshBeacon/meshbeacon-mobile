@@ -1,6 +1,70 @@
-# Welcome to your Expo app 👋
+# CDK Mobile (ClusterDuck Mobile)
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+CDK Mobile is an [Expo](https://expo.dev) / React Native companion app for the
+[ClusterDuck Protocol](https://clusterduckprotocol.org) mesh network. It turns
+a phone into the field interface for a **MamaDuck** ESP32 node, connected over
+USB serial (Android) or Bluetooth LE (iOS/Android), so responders and
+civilians can communicate, locate each other, and reach an emergency operator
+— even with **no cellular signal or internet connection**.
+
+## Key Features
+
+### 🆘 SOS & Emergency Command Center
+- One-tap **SOS button** sends the user's GPS location (lat/lng, altitude,
+  speed, heading) over the LoRa mesh to the operator panel
+  **MeshBeacon Ops** web application running the Emergency Command Center.
+- The connected ESP32's physical **hardware SOS button** is also recognized,
+  with phone-GPS fallback when the device has no onboard GPS fix, plus a
+  local push notification and an on-device SOS history log.
+- **Emergency Broadcast** — operator-initiated alerts sent to every duck on
+  the mesh simultaneously appear as a red banner with a push notification,
+  distinct from regular one-to-one messages.
+- Operators can remotely poll a duck for its current GPS fix; the app
+  auto-replies with the latest location within 5 seconds.
+
+### 💬 Messaging to the Operator
+- Compose and send free-text messages with a selectable **urgency level**
+  (low / medium / critical) and optional GPS tag, relayed to the Emergency
+  Command Center over the mesh.
+- Persistent **message history** (sent + received) stored locally on-device,
+  with local notifications for new incoming messages.
+
+### 🦆 Peer-to-Peer Decentralized Mesh Messaging (Meshtastic-style Direct Chat)
+- **Direct Chat** lets two people message each other duck-to-duck over LoRa,
+  independent of the Command Center, like Meshtastic-style peer messaging.
+- **Address Book** for saving frequently-contacted duck IDs under friendly
+  names instead of raw 8-character identifiers.
+- **Mutual location tracking** — opt-in GPS ping exchange every 2 minutes
+  between two peers, shown as a live countdown banner and rendered as
+  location-update cards in the chat thread.
+- **Nearby Ducks** discovery — the app passively tracks every duck heard on
+  the mesh (via relayed packets and chat pings), showing duck type, last-seen
+  time, and whether that duck has a phone currently attached.
+
+### 🗺️ Live Map with Offline Map Download
+- Full-screen interactive map (MapLibre + OpenStreetMap-based OpenFreeMap
+  tiles) showing your live GPS position and nearby mesh nodes.
+- **Download Area** — fetch a ~30 km × 30 km offline tile pack centred on
+  your current position for use with zero internet connectivity, with a
+  live download progress bar and stored-size indicator.
+- Delete the offline pack at any time to free up storage.
+
+### 🔌 Device Connectivity
+- Automatic transport selection: **USB serial** on Android (cable), **BLE
+  (Nordic UART Service)** on iOS and optionally Android.
+- Live connection status banner, BLE device scanner with RSSI signal
+  strength, and automatic disconnect detection.
+- Device Info card showing battery level and device ID, reported directly
+  from the ESP32.
+- LoRa radio region selector (MY/SG/PH/ID/US/UK presets) for compliance with
+  local frequency regulations.
+
+### ⚙️ Settings
+- Emergency contacts management and personal Medical ID editing, bundled
+  with any SOS/message sent to the operator.
+
+For the full wire protocol, frame formats, and firmware reference, see
+[CDK_PROTOCOL.md](CDK_PROTOCOL.md).
 
 ## Get started
 

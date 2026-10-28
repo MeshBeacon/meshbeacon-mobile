@@ -31,7 +31,7 @@ export default function HomeScreen() {
     new Set(),
   );
 
-  // Show an in-app confirmation when OpenDMS acknowledges the SOS.
+  // Show an in-app confirmation when MeshBeacon Ops acknowledges the SOS.
   const prevSosAckRef = useRef(esp32.lastSosAck);
   useEffect(() => {
     if (esp32.lastSosAck && esp32.lastSosAck !== prevSosAckRef.current) {

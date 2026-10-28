@@ -110,7 +110,7 @@ export type ScanAckFrame = {
 };
 export type GpsReqFrame = { type: "GPSREQ" };
 /**
- * Confirmation that the operator's system (OpenDMS) received the SOS.
+ * Confirmation that the operator's system (MeshBeacon Ops) received the SOS.
  * Broadcast by the firmware when it receives topic-22 "SOS DITERIMA" from the hub.
  */
 export type SosAckFrame = {

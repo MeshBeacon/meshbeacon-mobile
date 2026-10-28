@@ -406,7 +406,7 @@ frame must not exceed 256 bytes including the trailing `\n`, which limits
 #### Emergency Broadcast ← **triggers local notification + UI banner**
 
 Sent by the ESP32 when it receives a **topic 24** LoRa packet originating from
-the `opendms` operator panel. This is a **global** alert directed at all devices
+the `MeshBeacon Ops` operator panel. This is a **global** alert directed at all devices
 simultaneously (LoRa target `BROADCAST`), unlike `CDK:MSG` which goes to one
 specific duck.
 
@@ -1616,15 +1616,15 @@ early cancellation.
 
 ## 14. Emergency Broadcast
 
-The emergency broadcast feature allows an **operator** on the `opendms` web
-panel to send a single message to **all** connected ClusterDuck devices
+The emergency broadcast feature allows an **operator** on the `MeshBeacon Ops`
+web panel to send a single message to **all** connected ClusterDuck devices
 simultaneously. It is distinct from per-duck targeted messaging (§2.2 `CDK:MSG`)
 and uses a dedicated MQTT topic and LoRa target.
 
 ### End-to-End Flow
 
 ```
-Operator (opendms web UI)
+Operator (MeshBeacon Ops web UI)
         │
         │  POST /status/broadcast  { message: "Evacuate now" }
         ▼
@@ -1653,7 +1653,7 @@ MamaDuck firmware  →  handleDuckData(packet)  [case 24]
                   Home screen  →  red Emergency Broadcast banner
 ```
 
-### MQTT Payload (opendms → broker)
+### MQTT Payload (MeshBeacon Ops → broker)
 
 `MqttService::sendCommand()` publishes to `hub/command`:
 
@@ -1675,7 +1675,7 @@ The broadcast is also persisted in `cluster_data` with
 `duck_id = "BROADCAST"`, `topic = "outbound"`, and
 `payload = "MSG,TEXT:<message>"` for audit history.
 
-### HTTP Endpoint (opendms)
+### HTTP Endpoint (MeshBeacon Ops)
 
 ```
 POST /status/broadcast
@@ -1795,7 +1795,7 @@ Visual design:
 
 | Property          | `CDK:MSG,TEXT:…`           | `CDK:BCAST,TEXT:…`               |
 | ----------------- | -------------------------- | -------------------------------- |
-| Origin            | Duck user → their own duck | Operator (`opendms`) → all ducks |
+| Origin            | Duck user → their own duck | Operator (`MeshBeacon Ops`) → all ducks |
 | MQTT topic        | 22                         | 24                               |
 | LoRa target       | Specific duck ID           | `BROADCAST` (all devices)        |
 | App state field   | `incomingMessages[]`       | `broadcastAlerts[]`              |
