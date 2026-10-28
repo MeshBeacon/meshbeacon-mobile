@@ -2,8 +2,8 @@
 
 CDK Mobile is an [Expo](https://expo.dev) / React Native companion app for the
 [ClusterDuck Protocol](https://clusterduckprotocol.org) mesh network. It turns
-a phone into the field interface for a **MamaDuck** ESP32 node, connected over
-USB serial (Android) or Bluetooth LE (iOS/Android), so responders and
+a phone into the field interface for a **MamaDuck** node (ESP32 or ARM M4 v0+),
+connected over USB serial (Android) or Bluetooth LE (iOS/Android), so responders and
 civilians can communicate, locate each other, and reach an emergency operator
 — even with **no cellular signal or internet connection**.
 
@@ -13,7 +13,7 @@ civilians can communicate, locate each other, and reach an emergency operator
 - One-tap **SOS button** sends the user's GPS location (lat/lng, altitude,
   speed, heading) over the LoRa mesh to the operator panel
   **MeshBeacon Ops** web application running the Emergency Command Center.
-- The connected ESP32's physical **hardware SOS button** is also recognized,
+- The connected duck's physical **hardware SOS button** is also recognized,
   with phone-GPS fallback when the device has no onboard GPS fix, plus a
   local push notification and an on-device SOS history log.
 - **Emergency Broadcast** — operator-initiated alerts sent to every duck on
@@ -55,7 +55,7 @@ civilians can communicate, locate each other, and reach an emergency operator
 - Live connection status banner, BLE device scanner with RSSI signal
   strength, and automatic disconnect detection.
 - Device Info card showing battery level and device ID, reported directly
-  from the ESP32.
+  from the duck.
 - LoRa radio region selector (MY/SG/PH/ID/US/UK presets) for compliance with
   local frequency regulations.
 
